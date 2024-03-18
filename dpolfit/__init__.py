@@ -4,7 +4,8 @@
 # from .dpolfit import *
 from .fitting import polarizability
 from .psi4 import qmesps
-from .utilities import miscellaneous
+from .utilities import miscellaneous, constants
+from .data.defaultpoltypes import sagevdw_typed, element_typed
 
 
 from ._version import __version__

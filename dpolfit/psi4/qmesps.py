@@ -171,20 +171,4 @@ def worker(input_file: str, wd: str):
                 oemolrecord.set_mol(oemol)
 
         oechem.OEWriteRecord(rofs, oemolrecord)
-    return 0
-
-
-if __name__ == "__main__":
-
-    import importlib_resources
-
-    ray_path = "/tmp/ray_tmp"
-    os.makedirs(ray_path, exist_ok=True)
-    ray.init(_temp_dir=ray_path)
-
-    data_path = importlib_resources.files("dpolfit").joinpath("data")
-
-    worker(
-        input_file=os.path.join(data_path, "input.smi"),
-        wd=os.path.join(data_path, "tests"),
-    )
+    return wd

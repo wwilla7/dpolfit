@@ -5,6 +5,8 @@ import os
 import copy
 from collections import defaultdict
 import numpy as np
+from dpolfit.utilities.miscellaneous import *
+from dpolfit.utilities.constants import a03_to_angstrom3, a03_to_nm3
 
 # https://github.com/numpy/numpy/issues/20895
 np.finfo(np.dtype("float32"))
@@ -21,20 +23,17 @@ from scipy.optimize import nnls
 ureg = pint.UnitRegistry()
 Q_ = ureg.Quantity
 
-perturb_dipoles = {
-    "x+": [0.01, 0.0, 0.0],
-    "x-": [-0.01, 0.0, 0.0],
-    "y+": [0.0, 0.01, 0.0],
-    "y-": [0.0, -0.01, 0.0],
-    "z+": [0.0, 0.0, 0.01],
-    "z-": [0.0, 0.0, -0.01],
-}
-
-a03_to_angstrom3 = Q_(1, "a0**3").to("angstrom**3").magnitude
-a03_to_nm3 = Q_(1, "a0**3").to("nm**3").magnitude
 
 
-def label_alpha(oemol, smarts_pattern):
+def label_alpha(oemol: oechem.OEMol, smarts_pattern: str):
+    """
+    Lable polarizability parameters on the molecule
+
+    :param oemol: openeye molecule object
+    :type oemol: OEMol
+    :param smarts_pattern: the smarts pattern used to match the molecule
+    :type smarts_pattern: string
+    """
     ss = oechem.OESubSearch(smarts_pattern)
     oechem.OEPrepareSearch(oemol, ss)
 
@@ -46,7 +45,15 @@ def label_alpha(oemol, smarts_pattern):
     return ret
 
 
-def train(oedatabase, parameter_types):
+def train(oedatabase: oechem.OEMolRecord, parameter_types: list):
+    """
+    The main function to train polarizability against generated QM ESPs
+
+    :param oedatabase: The OE database object that contains all training data
+    :type oedatabase: *.oedb
+    :param parameter_types: The polarizability typing scheme 
+    :type parameter_types: List
+    """
     ndim = len(parameter_types)
     positions = {parm: idx for idx, parm in enumerate(parameter_types)}
     param_count = {parm: 0 for parm in parameter_types}
@@ -220,15 +227,3 @@ if __name__ == "__main__":
         "[#1:1]",
     ]
 
-    import importlib_resources
-
-    data_path = importlib_resources.files("dpolfit").joinpath(
-        os.path.join("data", "tests")
-    )
-    os.chdir(data_path)
-
-    oedata_file = "dataset.oedb"
-
-    ret = train(oedatabase=oedata_file, parameter_types=element_typed)
-    ret |= {"_dataset_file": oedata_file}
-    json.dump(ret, open("results.json", "w"), indent=2)

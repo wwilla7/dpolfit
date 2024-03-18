@@ -1,8 +1,7 @@
 #!/usr/bin/env python
 
-import pickle
 from openeye import oechem
-from oechem import OEMolRecord, OEField, OEStringType, OEBlobType
+from oechem import OEBlobType, OEField, OEMolRecord, OEStringType
 from openff.toolkit.topology import Molecule
 from openff.units import unit
 from qcelemental.models.molecule import Molecule as qcMolecule
@@ -27,6 +26,7 @@ perturb_dipoles = {
 }
 
 
+
 def qcmol2oemol(qcmol: qcMolecule) -> OEMolRecord:
     """
         Convert QCMol to OEMol
@@ -37,9 +37,9 @@ def qcmol2oemol(qcmol: qcMolecule) -> OEMolRecord:
         Parameters
         ----------
         qcmol : qcMolecule
-    coordinates.npy        QC molecule from the QCArchive records
+                QC molecule from the QCArchive records
 
-        ROEMolRecordeturns
+        Returns
         -------
         OEMolRecord
             Returned OEMolRecord
@@ -76,16 +76,3 @@ def qcmol2oemol(qcmol: qcMolecule) -> OEMolRecord:
 
     return oemolrecord
 
-
-# testing
-
-if __name__ == "__main__":
-    qcmol = pickle.load(open("test_mol.pkl", "rb"))
-
-    ofs = oechem.oeofstream("test_mol.oedb")
-
-    ret = qcmol2oemol(qcmol)
-
-    oechem.OEWriteRecord(ofs, ret)
-
-    print(ret)
