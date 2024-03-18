@@ -27,7 +27,7 @@ perturb_dipoles = {
 
 
 
-def qcmol2oemol(qcmol: qcMolecule) -> OEMolRecord:
+def _qcmol2oemol(qcmol: qcMolecule) -> OEMolRecord:
     """
         Convert QCMol to OEMol
 

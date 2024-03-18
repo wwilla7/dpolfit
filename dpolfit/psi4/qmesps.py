@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import json
 import os
 import shutil
@@ -5,9 +7,13 @@ from glob import glob
 
 import numpy as np
 import ray
-from dpolfit.utilities.miscellaneous import *
 from numpyencoder import NumpyEncoder
-from openeye import oechem, oeomega
+try:
+    from openeye import oechem, oeomega
+    from dpolfit.utilities.miscellaneous import *
+except ModuleNotFoundError:
+    print("Don't have openeye toolkit installed")
+
 from openff.recharge.esp import ESPSettings
 from openff.recharge.esp.psi4 import Psi4ESPGenerator
 from openff.recharge.grids import MSKGridSettings
@@ -18,8 +24,15 @@ import psi4
 
 
 @ray.remote(num_cpus=8)
-def psi4_optimizer(wd: str):
+def psi4_optimizer(wd: str) -> float:
+    """
+    Optimize geometry before QM ESPs calcs
 
+    :param wd: working directory
+    :type wd: str
+    :return: returned QM energy
+    :rtype: float
+    """
     os.chdir(wd)
 
     with open("input.xyz", "r") as f:
@@ -38,7 +51,17 @@ def psi4_optimizer(wd: str):
 
 
 @ray.remote(num_cpus=8)
-def psi4_esps(imposed: str, wd: str):
+def psi4_esps(imposed: str, wd: str) -> 0:
+    """
+    Compute QM ESPs with Psi4
+
+    :param imposed: imposed external electric field
+    :type imposed: str
+    :param wd: working directory
+    :type wd: str
+    :return: 0 
+    :rtype: float
+    """
     cwd = os.getcwd()
     os.chdir(wd)
 
@@ -86,7 +109,21 @@ def psi4_esps(imposed: str, wd: str):
     return 0
 
 
-def worker(input_file: str, wd: str):
+def worker(input_file: str, wd: str) -> str:
+    """
+    The main function to carry out geometry optimization
+    and QM ESPs generation.
+
+    This function requires a modified version of `openff-recharge`
+    for customized grid setting and imposed external electric fields.
+
+    :param input_file: input dataset 
+    :type input_file: str
+    :param wd: working directory
+    :type wd: str
+    :return: working directory that contains all the output data 
+    :rtype: str
+    """
 
     cwd = os.getcwd()
     ifs = oechem.oemolistream(input_file)

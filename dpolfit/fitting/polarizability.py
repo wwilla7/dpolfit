@@ -5,7 +5,6 @@ import os
 import copy
 from collections import defaultdict
 import numpy as np
-from dpolfit.utilities.miscellaneous import *
 from dpolfit.utilities.constants import a03_to_angstrom3, a03_to_nm3
 
 # https://github.com/numpy/numpy/issues/20895
@@ -13,8 +12,13 @@ np.finfo(np.dtype("float32"))
 np.finfo(np.dtype("float64"))
 
 import pint
-from openeye import oechem
-from oechem import OEField, Types
+try: 
+    from openeye import oechem
+    from oechem import OEField, Types
+    from dpolfit.utilities.miscellaneous import *
+except ModuleNotFoundError:
+    from dpolfit.utilities import oechem
+    print("Don't have openeye toolkit installed")
 from scipy.spatial.distance import cdist
 from tqdm import tqdm
 from datetime import datetime
@@ -25,7 +29,7 @@ Q_ = ureg.Quantity
 
 
 
-def label_alpha(oemol: oechem.OEMol, smarts_pattern: str):
+def label_alpha(oemol: oechem.OEMol, smarts_pattern: str) -> list:
     """
     Lable polarizability parameters on the molecule
 
@@ -33,6 +37,8 @@ def label_alpha(oemol: oechem.OEMol, smarts_pattern: str):
     :type oemol: OEMol
     :param smarts_pattern: the smarts pattern used to match the molecule
     :type smarts_pattern: string
+    :return: return matched SMARTs patterns 
+    :rtype: list
     """
     ss = oechem.OESubSearch(smarts_pattern)
     oechem.OEPrepareSearch(oemol, ss)
@@ -45,14 +51,16 @@ def label_alpha(oemol: oechem.OEMol, smarts_pattern: str):
     return ret
 
 
-def train(oedatabase: oechem.OEMolRecord, parameter_types: list):
+def train(oedatabase: oechem.OEMolRecord, parameter_types: list) -> dict:
     """
     The main function to train polarizability against generated QM ESPs
 
     :param oedatabase: The OE database object that contains all training data
-    :type oedatabase: *.oedb
+    :type oedatabase: .oedb
     :param parameter_types: The polarizability typing scheme 
     :type parameter_types: List
+    :return: return derived polarizabilities and optimization details 
+    :rtype: dict
     """
     ndim = len(parameter_types)
     positions = {parm: idx for idx, parm in enumerate(parameter_types)}
@@ -172,58 +180,4 @@ def train(oedatabase: oechem.OEMolRecord, parameter_types: list):
     }
 
     return dt_json
-
-
-if __name__ == "__main__":
-    element_typed = [
-        "[#1:1]",
-        "[#6:1]",
-        "[#7:1]",
-        "[#8:1]",
-        "[#9:1]",
-        "[#15:1]",
-        "[#16:1]",
-        "[#17:1]",
-        "[#35:1]",
-    ]
-
-    sagevdw_typed = [
-        "[#1:1]-[#8X2H2+0]-[#1]",
-        "[#1]-[#8X2H2+0:1]-[#1]",
-        "[#53X0-1:1]",
-        "[#35X0-1:1]",
-        "[#17X0-1:1]",
-        "[#9X0-1:1]",
-        "[#55+1:1]",
-        "[#37+1:1]",
-        "[#19+1:1]",
-        "[#11+1:1]",
-        "[#3+1:1]",
-        "[#53:1]",
-        "[#35:1]",
-        "[#17:1]",
-        "[#9:1]",
-        "[#15:1]",
-        "[#16:1]",
-        "[#7:1]",
-        "[#8X2H1+0:1]",
-        "[#8X2H0+0:1]",
-        "[#8:1]",
-        "[#6X4:1]",
-        "[#6X2:1]",
-        "[#6:1]",
-        "[#1:1]-[#16]",
-        "[#1:1]-[#8]",
-        "[#1:1]-[#7]",
-        "[#1:1]-[#6X2]",
-        "[#1:1]-[#6X3](~[#7,#8,#9,#16,#17,#35])~[#7,#8,#9,#16,#17,#35]",
-        "[#1:1]-[#6X3]~[#7,#8,#9,#16,#17,#35]",
-        "[#1:1]-[#6X3]",
-        "[#1:1]-[#6X4]~[*+1,*+2]",
-        "[#1:1]-[#6X4](-[#7,#8,#9,#16,#17,#35])(-[#7,#8,#9,#16,#17,#35])-[#7,#8,#9,#16,#17,#35]",
-        "[#1:1]-[#6X4](-[#7,#8,#9,#16,#17,#35])-[#7,#8,#9,#16,#17,#35]",
-        "[#1:1]-[#6X4]-[#7,#8,#9,#16,#17,#35]",
-        "[#1:1]-[#6X4]",
-        "[#1:1]",
-    ]
 

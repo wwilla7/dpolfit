@@ -1,0 +1,23 @@
+name: docs 
+channels:
+  - conda-forge
+dependencies:
+    # Base depends
+  - python =3.10
+  - pip
+  - numpy
+  - scipy
+  - openff-utilities
+  - openff-units >=0.2
+  - openff-recharge
+  - pint
+  - openff-toolkit
+  - psi4
+  - sphinx
+  - sphinx_rtd_theme
+
+    # Pip-only installs
+  - pip:
+    - ray
+    - numpyencoder
+

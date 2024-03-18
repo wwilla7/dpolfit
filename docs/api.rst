@@ -3,7 +3,13 @@ API Documentation
 
 .. autosummary::
    :toctree: autosummary
-
-   dpolfit.fitting.polarizability
+   
    dpolfit.psi4.qmesps
-   dpolfit.utilities.miscellaneous
+   dpolfit.fitting.polarizability
+
+.. automodule:: dpolfit.psi4.qmesps
+   :members:
+   :no-index: 
+.. automodule:: dpolfit.fitting.polarizability
+   :members:
+   :no-index: 
