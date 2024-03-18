@@ -5,7 +5,7 @@ dpolfit
 [![codecov](https://codecov.io/gh/REPLACE_WITH_OWNER_ACCOUNT/dpolfit/branch/main/graph/badge.svg)](https://codecov.io/gh/REPLACE_WITH_OWNER_ACCOUNT/dpolfit/branch/main)
 
 
-A package to deriv use the fast polarizable force field developed in Michael Gilson group at UCSD.
+A package to derive and use the fast polarizable force field developed in Michael Gilson group at UCSD.
 
 ### Copyright
 

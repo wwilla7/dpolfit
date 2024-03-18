@@ -1,0 +1,48 @@
+name: dpolfit-user
+channels:
+  - openeye
+  - conda-forge
+dependencies:
+    # Base depends
+  - python =3.10
+  - pip
+  - numpy
+  - scipy
+  - jinja2
+  - pydantic
+  - openff-utilities
+  - openff-units >=0.2
+  - matplotlib
+  - pint
+  - openff-toolkit
+  - openmm =8
+  - psi4
+  - cudatoolkit >=0.11
+  - openeye-toolkits
+  - sqlalchemy
+  - sqlite
+  
+    # Optional
+  - xtb-python
+  - geometric =1
+  - qcengine >=0.25
+  - qcelemental >=0.25.1
+
+    # Testing
+  - pytest
+  - pytest-cov
+  - codecov
+
+    # Development
+  - black
+  - flake8
+  - isort
+  - jedi
+
+    # Pip-only installs
+  - pip:
+    - ray
+    - python-lsp-server
+    - numpyencoder
+  #  - codecov
+
