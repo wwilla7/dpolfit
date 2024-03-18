@@ -1,20 +1,37 @@
 name: test
 channels:
-
+  - openeye
   - conda-forge
-
-  - defaults
 dependencies:
     # Base depends
-  - python
+  - python =3.10
   - pip
-
+  - numpy
+  - scipy
+    #  - jinja2
+    # - pydantic
+  - openff-utilities
+  - openff-units >=0.2
+  - openff-recharge
+    #  - matplotlib
+  - pint
+  - openff-toolkit
+    #- openmm =8
+  - psi4
+    #- cudatoolkit >=0.11
+  - openeye-toolkits
+    #- sqlalchemy
+    #- sqlite
+  
     # Testing
   - pytest
   - pytest-cov
   - codecov
 
     # Pip-only installs
-  #- pip:
+  - pip:
+    - ray
+      #- python-lsp-server
+    - numpyencoder
   #  - codecov
 
