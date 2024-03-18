@@ -5,7 +5,7 @@ from glob import glob
 
 import numpy as np
 import ray
-from dpolfit.utilities.miscellaneous_scripts import *
+from dpolfit.utilities.miscellaneous import *
 from numpyencoder import NumpyEncoder
 from openeye import oechem, oeomega
 from openff.recharge.esp import ESPSettings

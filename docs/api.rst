@@ -4,4 +4,6 @@ API Documentation
 .. autosummary::
    :toctree: autosummary
 
-   dpolfit.canvas
+   dpolfit.fitting.polarizability
+   dpolfit.psi4.qmesps
+   dpolfit.utilities.miscellaneous
