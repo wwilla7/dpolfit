@@ -1,6 +1,7 @@
 name: docs 
 channels:
   - conda-forge
+  - openeye
 dependencies:
     # Base depends
   - python =3.10
@@ -15,6 +16,7 @@ dependencies:
   - psi4
   - sphinx
   - sphinx_rtd_theme
+  - openeye-toolkits
 
     # Pip-only installs
   - pip:

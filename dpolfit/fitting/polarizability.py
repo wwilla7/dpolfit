@@ -1,32 +1,31 @@
 #!/usr/bin/env python
 
+import copy
 import json
 import os
-import copy
 from collections import defaultdict
+
 import numpy as np
+
 from dpolfit.utilities.constants import a03_to_angstrom3, a03_to_nm3
 
 # https://github.com/numpy/numpy/issues/20895
 np.finfo(np.dtype("float32"))
 np.finfo(np.dtype("float64"))
 
+from datetime import datetime
+
 import pint
-try: 
-    from openeye import oechem
-    from oechem import OEField, Types
-    from dpolfit.utilities.miscellaneous import *
-except ModuleNotFoundError:
-    from dpolfit.utilities import oechem
-    print("Don't have openeye toolkit installed")
+from openeye import oechem
+from openeye.oechem import OEField, Types
+from scipy.optimize import nnls
 from scipy.spatial.distance import cdist
 from tqdm import tqdm
-from datetime import datetime
-from scipy.optimize import nnls
+
+from dpolfit.utilities.miscellaneous import *
 
 ureg = pint.UnitRegistry()
 Q_ = ureg.Quantity
-
 
 
 def label_alpha(oemol: oechem.OEMol, smarts_pattern: str, index: bool = True) -> list:
@@ -37,7 +36,7 @@ def label_alpha(oemol: oechem.OEMol, smarts_pattern: str, index: bool = True) ->
     :type oemol: OEMol
     :param smarts_pattern: the smarts pattern used to match the molecule
     :type smarts_pattern: string
-    :return: return matched SMARTs patterns 
+    :return: return matched SMARTs patterns
     :rtype: list
     """
     ss = oechem.OESubSearch(smarts_pattern)
@@ -60,9 +59,9 @@ def train(oedatabase: oechem.OEMolRecord, parameter_types: list) -> dict:
 
     :param oedatabase: The OE database object that contains all training data
     :type oedatabase: .oedb
-    :param parameter_types: The polarizability typing scheme 
+    :param parameter_types: The polarizability typing scheme
     :type parameter_types: List
-    :return: return derived polarizabilities and optimization details 
+    :return: return derived polarizabilities and optimization details
     :rtype: dict
     """
     ndim = len(parameter_types)
@@ -183,4 +182,3 @@ def train(oedatabase: oechem.OEMolRecord, parameter_types: list) -> dict:
     }
 
     return dt_json
-

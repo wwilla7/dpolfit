@@ -5,25 +5,18 @@ Fit partial charges for typed polarizabilities
 """
 
 import copy
+import json
 from collections import defaultdict
 
-import json
 import numpy as np
 import pint
+from openeye import oechem
+from openeye.oechem import OEField, Types
 from rdkit import Chem
 from scipy.spatial.distance import cdist
 
-try:
-    from openeye import oechem
-    from oechem import OEField, Types
-    from dpolfit.utilities.miscellaneous import *
-except ModuleNotFoundError:
-    from dpolfit.utilities import oechem
-    smiTags = None
-
-    print("Don't have openeye toolkit installed")
-
 from dpolfit.fitting.polarizability import label_alpha
+from dpolfit.utilities.miscellaneous import *
 
 ureg = pint.UnitRegistry()
 Q_ = ureg.Quantity
@@ -283,9 +276,11 @@ def fit(oerecord: oechem.OEMolRecord, polarizabilities: dict, unit: str) -> np.n
 
         grid_bohr = Q_(grid_angstrom, ureg.angstrom).to(ureg.bohr).magnitude
 
-        grid_esp_0 = np.array(json.loads(
-            conf_record.get_value(OEField("grid_esp_0_au_field", Types.String))
-            )).reshape(-1)
+        grid_esp_0 = np.array(
+            json.loads(
+                conf_record.get_value(OEField("grid_esp_0_au_field", Types.String))
+            )
+        ).reshape(-1)
 
         npoints = len(grid_bohr)
 
@@ -321,7 +316,9 @@ def fit(oerecord: oechem.OEMolRecord, polarizabilities: dict, unit: str) -> np.n
 
         polar_region = list(set(range(natom)) - forced_symmetry)
         n_polar_region = len(polar_region)
-        elements = [oechem.OEGetAtomicSymbol(a.GetAtomicNum()) for a in oemol.GetAtoms()]
+        elements = [
+            oechem.OEGetAtomicSymbol(a.GetAtomicNum()) for a in oemol.GetAtoms()
+        ]
 
         # Distance dependent matrices for fitting
 

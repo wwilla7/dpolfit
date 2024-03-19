@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 from openeye import oechem
-from oechem import OEBlobType, OEField, OEMolRecord, OEStringType
+from openeye.oechem import OEBlobType, OEField, OEMolRecord, OEStringType
 from openff.toolkit.topology import Molecule
 from openff.units import unit
 from qcelemental.models.molecule import Molecule as qcMolecule
@@ -18,7 +18,7 @@ grid_esp_0_au_field = OEField("grid_esp_0_au", OEStringType)
 smiTags = oechem.OESMILESFlag_AtomMaps
 
 perturb_dipoles = {
-    "0":  [0.0, 0.0, 0.0],
+    "0": [0.0, 0.0, 0.0],
     "x+": [0.01, 0.0, 0.0],
     "x-": [-0.01, 0.0, 0.0],
     "y+": [0.0, 0.01, 0.0],
@@ -28,23 +28,22 @@ perturb_dipoles = {
 }
 
 
-
 def _qcmol2oemol(qcmol: qcMolecule) -> OEMolRecord:
     """
-        Convert QCMol to OEMol
+    Convert QCMol to OEMol
 
-        Convert a QM Molecule to an OE Molecule and store all information
-        on an OEMolRecord.
+    Convert a QM Molecule to an OE Molecule and store all information
+    on an OEMolRecord.
 
-        Parameters
-        ----------
-        qcmol : qcMolecule
-                QC molecule from the QCArchive records
+    Parameters
+    ----------
+    qcmol : qcMolecule
+            QC molecule from the QCArchive records
 
-        Returns
-        -------
-        OEMolRecord
-            Returned OEMolRecord
+    Returns
+    -------
+    OEMolRecord
+        Returned OEMolRecord
     """
     oemolrecord = OEMolRecord()
     mapped_smi = qcmol.extras["canonical_isomeric_explicit_hydrogen_mapped_smiles"]
@@ -77,4 +76,3 @@ def _qcmol2oemol(qcmol: qcMolecule) -> OEMolRecord:
     oemolrecord.set_mol(oemol)
 
     return oemolrecord
-

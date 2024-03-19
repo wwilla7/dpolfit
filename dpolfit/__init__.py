@@ -2,15 +2,11 @@
 
 # Add imports here
 # from .dpolfit import *
-from .fitting import polarizability
-from .fitting import respdpol
-from .psi4 import qmesps
 from .data import defaultpoltypes
-from .data.defaultpoltypes import sagevdw_typed, element_typed
-try:
-    from .utilities import miscellaneous, constants
-except ModuleNotFoundError:
-    pass
-
+from .data.defaultpoltypes import element_typed, sagevdw_typed
+from .fitting import polarizability, respdpol
+from .psi4 import qmesps
+from .utilities import constants, miscellaneous
+from .examples import _fitting, _respdpol 
 
 from ._version import __version__

@@ -6,23 +6,18 @@ import shutil
 from glob import glob
 
 import numpy as np
+import psi4
 import ray
 from numpyencoder import NumpyEncoder
-
-try:
-    from openeye import oechem, oeomega
-    from dpolfit.utilities.miscellaneous import *
-except ModuleNotFoundError:
-    print("Don't have openeye toolkit installed")
-
+from openeye import oechem, oeomega
 from openff.recharge.esp import ESPSettings
 from openff.recharge.esp.psi4 import Psi4ESPGenerator
-from openff.recharge.grids import MSKGridSettings
+from openff.recharge.grids import GridGenerator, MSKGridSettings
 from openff.toolkit.topology import Molecule
 from openff.units import unit
-from openff.recharge.grids import GridGenerator
 
-import psi4
+from dpolfit.utilities.miscellaneous import *
+
 
 @ray.remote(num_cpus=8)
 def psi4_optimizer(wd: str) -> float:
@@ -45,7 +40,7 @@ def psi4_optimizer(wd: str) -> float:
 
     # psi4.set_options({"basis": "aug-cc-pvtz", "scf_type": "df"})
     # ene = psi4.optimize("mp2", molecule=psi4mol)
-    
+
     # Reference for the choice of QM level of theory
     # DOI: 10.1021/acs.jcim.9b00962
     psi4.set_options({"basis": "cc-pV(T+d)Z", "scf_type": "df"})
@@ -124,7 +119,7 @@ def psi4_esps(imposed: str, wd: str) -> 0:
         shutil.rmtree(tmp_wd)
 
     os.makedirs(tmp_wd, exist_ok=False)
-    
+
     ret_conformer, esp, electric_field = Psi4ESPGenerator._generate(
         molecule=offmol,
         conformer=offmol.conformers[0],
