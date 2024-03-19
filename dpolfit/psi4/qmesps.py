@@ -8,6 +8,7 @@ from glob import glob
 import numpy as np
 import ray
 from numpyencoder import NumpyEncoder
+
 try:
     from openeye import oechem, oeomega
     from dpolfit.utilities.miscellaneous import *
@@ -19,9 +20,9 @@ from openff.recharge.esp.psi4 import Psi4ESPGenerator
 from openff.recharge.grids import MSKGridSettings
 from openff.toolkit.topology import Molecule
 from openff.units import unit
+from openff.recharge.grids import GridGenerator
 
 import psi4
-
 
 @ray.remote(num_cpus=8)
 def psi4_optimizer(wd: str) -> float:
@@ -42,12 +43,54 @@ def psi4_optimizer(wd: str) -> float:
     psi4.set_num_threads(8)
     psi4mol = psi4.geometry(mol_xyz)
 
-    psi4.set_options({"basis": "aug-cc-pvtz", "scf_type": "df"})
+    # psi4.set_options({"basis": "aug-cc-pvtz", "scf_type": "df"})
+    # ene = psi4.optimize("mp2", molecule=psi4mol)
+    
+    # Reference for the choice of QM level of theory
+    # DOI: 10.1021/acs.jcim.9b00962
+    psi4.set_options({"basis": "cc-pV(T+d)Z", "scf_type": "df"})
+    ene = psi4.optimize("b3lyp", molecule=psi4mol)
 
-    ene = psi4.optimize("mp2", molecule=psi4mol)
     psi4mol.save_xyz_file("optimized.xyz", 1)
 
     return ene
+
+
+def generate_grid(wd: str) -> 0:
+    """
+    [TODO:description]
+
+    :param wd: [TODO:description]
+    :type wd: str
+    :return: [TODO:description]
+    :rtype: 0
+    """
+
+    os.chdir(wd)
+
+    grid_settings = MSKGridSettings(type="msk", density=17.0, layers=10.0)
+
+    # if os.path.exists("optimized.xyz"):
+    #    pass
+    # else:
+    #    ret = psi4_optimizer.remote(wd)
+    #    print(ray.get(ret))
+
+    offmol = Molecule.from_file("input.sdf", file_format="sdf")
+    conformer = (
+        np.loadtxt("optimized.xyz", skiprows=2, usecols=(1, 2, 3)) * unit.angstrom
+    )
+    offmol.conformers.clear()
+    offmol.conformers.append(conformer)
+
+    grid = GridGenerator.generate(offmol, conformer, grid_settings)
+
+    offmol.to_file("optimized.sdf", file_format="sdf")
+
+    np.save("grid.npy", grid.magnitude)
+    np.save("coordinates.npy", conformer.magnitude)
+
+    return 0
 
 
 @ray.remote(num_cpus=8)
@@ -59,17 +102,11 @@ def psi4_esps(imposed: str, wd: str) -> 0:
     :type imposed: str
     :param wd: working directory
     :type wd: str
-    :return: 0 
+    :return: 0
     :rtype: float
     """
     cwd = os.getcwd()
     os.chdir(wd)
-
-    if os.path.exists("optimized.xyz"):
-        pass
-    else:
-        ret = psi4_optimizer.remote(wd)
-        print(ray.get(ret))
 
     qc_data_settings = ESPSettings(
         method="mp2",
@@ -78,29 +115,27 @@ def psi4_esps(imposed: str, wd: str) -> 0:
         perturb_dipole=perturb_dipoles[imposed],
     )
 
-    offmol = Molecule.from_file("input.sdf", file_format="sdf")
-    conformer = (
-        np.loadtxt("optimized.xyz", skiprows=2, usecols=(1, 2, 3)) * unit.angstrom
-    )
-    offmol.conformers.clear()
-    offmol.conformers.append(conformer)
+    offmol = Molecule.from_file("optimized.sdf", file_format="sdf")
 
-    ret_conformer, grid, esp, electric_field = Psi4ESPGenerator.generate(
+    grid = np.load("grid.npy") * unit.angstrom
+
+    tmp_wd = os.path.join(os.getcwd(), imposed)
+    if os.path.exists(tmp_wd):
+        shutil.rmtree(tmp_wd)
+
+    os.makedirs(tmp_wd, exist_ok=False)
+    
+    ret_conformer, esp, electric_field = Psi4ESPGenerator._generate(
         molecule=offmol,
-        conformer=conformer,
+        conformer=offmol.conformers[0],
+        grid=grid,
         settings=qc_data_settings,
-        directory=os.path.join(os.getcwd(), imposed),
+        directory=tmp_wd,
         minimize=False,
         compute_esp=True,
         compute_field=False,
         n_threads=8,
     )
-
-    offmol.to_file("optimized.sdf", file_format="sdf")
-
-    if imposed == "0":
-        np.save("grid.npy", grid.magnitude)
-        np.save("coordinates.npy", conformer.magnitude)
 
     np.save(f"grid_esp.{imposed}.npy", esp.magnitude)
 
@@ -117,11 +152,11 @@ def worker(input_file: str, wd: str) -> str:
     This function requires a modified version of `openff-recharge`
     for customized grid setting and imposed external electric fields.
 
-    :param input_file: input dataset 
+    :param input_file: input dataset
     :type input_file: str
     :param wd: working directory
     :type wd: str
-    :return: working directory that contains all the output data 
+    :return: working directory that contains all the output data
     :rtype: str
     """
 
@@ -149,6 +184,9 @@ def worker(input_file: str, wd: str) -> str:
                 oechem.OEWriteMolecule(ofs, this_mol)
                 ofs = oechem.oemolostream("input.sdf")
                 oechem.OEWriteMolecule(ofs, this_mol)
+                ret = psi4_optimizer.remote(c_p)
+                print(ray.get(ret))
+                generate_grid(c_p)
                 for k, v in perturb_dipoles.items():
                     ret = psi4_esps.remote(k, c_p)
                     workers.append(ret)

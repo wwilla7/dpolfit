@@ -25,7 +25,7 @@ wd = worker(
 
 ray.shutdown()
 
-trainingset = oedatabase = os.path.join(wd, "dataset.oedb")
+trainingset = os.path.join(wd, "dataset.oedb")
 pol_ret = train(trainingset, parameter_types=element_typed)
 pol_ret |= {"_trainingset": trainingset}
 json.dump(pol_ret, open("polarizabilities.json", "w"), indent=2)

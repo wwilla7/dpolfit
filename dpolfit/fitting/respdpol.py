@@ -14,11 +14,12 @@ from rdkit import Chem
 from scipy.spatial.distance import cdist
 
 try:
-    from dpolfit.utilities.miscellaneous import *
-    from oechem import OEField, Types
     from openeye import oechem
+    from oechem import OEField, Types
+    from dpolfit.utilities.miscellaneous import *
 except ModuleNotFoundError:
     from dpolfit.utilities import oechem
+    smiTags = None
 
     print("Don't have openeye toolkit installed")
 
