@@ -29,7 +29,7 @@ Q_ = ureg.Quantity
 
 
 
-def label_alpha(oemol: oechem.OEMol, smarts_pattern: str) -> list:
+def label_alpha(oemol: oechem.OEMol, smarts_pattern: str, index: bool = True) -> list:
     """
     Lable polarizability parameters on the molecule
 
@@ -46,7 +46,10 @@ def label_alpha(oemol: oechem.OEMol, smarts_pattern: str) -> list:
     ret = []
     for match in ss.Match(oemol):
         # Only need the first atom, not the entire pattern
-        ret.append([ma.target.GetIdx() for ma in match.GetAtoms()][0])
+        if index:
+            ret.append([ma.target.GetIdx() for ma in match.GetAtoms()][0])
+        else:
+            ret.append([ma.target for ma in match.GetAtoms()][0])
 
     return ret
 

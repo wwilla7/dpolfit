@@ -15,6 +15,8 @@ geometry_angstrom_field = OEField("geometry_angstrom", OEStringType)
 grid_angstrom_field = OEField("grid_angstrom", OEStringType)
 grid_esp_0_au_field = OEField("grid_esp_0_au", OEStringType)
 
+smiTags = oechem.OESMILESFlag_AtomMaps
+
 perturb_dipoles = {
     "0":  [0.0, 0.0, 0.0],
     "x+": [0.01, 0.0, 0.0],
