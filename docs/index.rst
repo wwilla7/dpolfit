@@ -8,7 +8,7 @@ Welcome to dpolfit's documentation!
 
 .. toctree::
    :maxdepth: 2
-   :caption: Contents:
+   :caption: dpolfit content:
 
    getting_started
    api

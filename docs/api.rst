@@ -1,8 +1,8 @@
-API Documentation
+Available Modules
 =================
-
 .. autosummary::
    :toctree: autosummary
+   :recursive:
    
    dpolfit.psi4.qmesps
    dpolfit.fitting.polarizability
@@ -12,7 +12,8 @@ API Documentation
    dpolfit.utilities.constants
 
 
-
+API Documentation
+=================
 .. automodule:: dpolfit.psi4.qmesps
    :members:
    :no-index:
