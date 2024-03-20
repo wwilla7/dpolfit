@@ -10,6 +10,7 @@ API Documentation
    dpolfit.examples._fitting
    dpolfit.examples._respdpol
    dpolfit.openmm.ffxml
+   dpolfit.utilities.constants
 
 
 

@@ -112,4 +112,5 @@ ENV/
 # development
 dpolfit/data/
 */timer.dat
+*/*/timer.dat
 dpolfit/examples/*.json

@@ -17,6 +17,7 @@ dependencies:
   - sphinx
   - sphinx_rtd_theme
   - openeye-toolkits
+  - lxml
 
     # Pip-only installs
   - pip:
