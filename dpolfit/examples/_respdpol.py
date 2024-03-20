@@ -16,7 +16,7 @@ from dpolfit.fitting.respdpol import fit
 
 def main(**args):
     """
-    This file contains an example to fit respdpol stype partial charges
+    This file contains an example to fit respdpol style partial charges
     with typed polarizabilities.
     """
 

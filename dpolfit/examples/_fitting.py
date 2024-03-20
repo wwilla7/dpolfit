@@ -11,14 +11,14 @@ import os
 import importlib_resources
 import ray
 
-from dpolfit import element_typed
+from dpolfit.data.defaultpoltypes import element_typed
 from dpolfit.fitting.polarizability import train
 from dpolfit.psi4.qmesps import worker
 
 
 def main(**args):
     """
-    An example to derive typed polarizability parameters from quantum chemistry
+    An example to derive typed polarizability parameters from quantum chemistry.
     """
 
     data_path = importlib_resources.files("dpolfit").joinpath("data")

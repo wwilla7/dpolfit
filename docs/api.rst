@@ -7,8 +7,7 @@ API Documentation
    dpolfit.psi4.qmesps
    dpolfit.fitting.polarizability
    dpolfit.fitting.respdpol
-   dpolfit.examples._fitting
-   dpolfit.examples._respdpol
+   dpolfit.examples
    dpolfit.openmm.ffxml
    dpolfit.utilities.constants
 
@@ -21,11 +20,5 @@ API Documentation
    :members:
    :no-index:
 .. automodule:: dpolfit.fitting.respdpol
-   :members:
-   :no-index:
-.. automodule:: dpolfit.examples._fitting
-   :members:
-   :no-index:
-.. automodule:: dpolfit.examples._respdpol
    :members:
    :no-index:
