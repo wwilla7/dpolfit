@@ -1,5 +1,5 @@
 dpolfit
-==============================
+-------
 
 .. image:: https://readthedocs.org/projects/dpolfit/badge/?version=latest
    :target: https://dpolfit.readthedocs.io/en/latest/?badge=latest

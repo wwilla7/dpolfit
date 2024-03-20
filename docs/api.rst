@@ -9,6 +9,7 @@ API Documentation
    dpolfit.fitting.respdpol
    dpolfit.examples._fitting
    dpolfit.examples._respdpol
+   dpolfit.openmm.ffxml
 
 
 
