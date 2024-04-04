@@ -4,13 +4,14 @@ import json
 import os
 import shutil
 from collections import defaultdict
+from datetime import datetime
 
 import mdtraj as md
 import numpy as np
 import pandas as pd
 import pint
-import scipy
 from lxml import etree
+from numpyencoder import NumpyEncoder
 from openmm import (AmoebaMultipoleForce, LangevinIntegrator, NonbondedForce,
                     Platform, XmlSerializer, unit)
 from openmm.app import PDBFile, Simulation
@@ -19,16 +20,68 @@ from scipy.optimize import minimize
 ureg = pint.UnitRegistry()
 Q_ = ureg.Quantity
 
-from dpolfit.openmm.ffxml import update_ff, update_results
+property_reference = pd.read_csv(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "references.csv"),
+    index_col="property",
+)
+
+parameter_names = {
+    "./HarmonicBondForce/Bond[@class1='401'][@class2='402']": "length",
+    "./HarmonicAngleForce/Angle[@class1='402'][@class2='401'][@class3='402']": "angle",
+    "./NonbondedForce/Atom[@class='401'][@sigma]": "sigma",
+    "./NonbondedForce/Atom[@class='401'][@epsilon]": "epsilon",
+    "./NonbondedForce/Atom[@class='402'][@sigma]": "sigma",
+    "./NonbondedForce/Atom[@class='402'][@epsilon]": "epsilon",
+    "./AmoebaMultipoleForce/Multipole[@type='401']": "c0",
+    "./AmoebaMultipoleForce/Multipole[@type='402']": "c0",
+    "./AmoebaMultipoleForce/Polarize[@type='401'][@polarizability]": "polarizability",
+    "./AmoebaMultipoleForce/Polarize[@type='402'][@polarizability]": "polarizability",
+    "./AmoebaMultipoleForce/Polarize[@thole]": "thole",
+}
 
 
-def calc_properties(**kwargs) -> dict:
+def update_ffxml(ff_file: str, parameters: dict) -> str:
+    tree = etree.parse(ff_file)
+    root = tree.getroot()
+
+    for k, v in parameters.items():
+        ret = root.find(k)
+        ret.set(parameter_names[k], str(v["value"]))
+
+    q1 = root.find("./AmoebaMultipoleForce/Multipole[@type='401']")
+    q2 = root.find("./AmoebaMultipoleForce/Multipole[@type='402']")
+    q2.set("c0", str(-0.5 * float(q1.attrib["c0"])))
+
+    d = root.find(".//DateGenerated")
+    d.text = f'{datetime.now().strftime("%m-%d-%Y %H:%M:%S")} on {os.uname().nodename}'
+
+    etree.indent(tree, "  ")
+    ret = etree.tostring(tree, encoding="utf-8", pretty_print=True).decode("utf-8")
+
+    return ret
+
+
+def update_from_template(input_array: np.array, parameters: dict) -> dict:
     """
-    Post process MD simulations and calculate liquid properties
+    Update the parameters with new data split out from the optimizer
 
-    :return: Return calculated properties
+    :param input_array: [TODO:description]
+    :type input_array: np.array
+    :param parameters: [TODO:description]
+    :type parameters: dict
+    :return: [TODO:description]
     :rtype: dict
     """
+
+    data = input_array.tolist()
+
+    for k, v in parameters.items():
+        v["value"] = data.pop(0)
+
+    return parameters
+
+
+def calc_properties(**kwargs):
     e_l = Q_(kwargs["Total Energy (kJ/mole)"], "kJ/mole")
     e_g = Q_(kwargs["Total Energy (kJ/mole) (gas)"], "kJ/mole")
     v_l = Q_(kwargs["Box Volume (nm^3)"], "nm**3")
@@ -38,7 +91,7 @@ def calc_properties(**kwargs) -> dict:
     kb = Q_(1, ureg.boltzmann_constant).to("kJ/kelvin")
     na = Q_(1, "N_A")
     kb_u = (kb / (1 / na).to("mole")).to("kJ/kelvin/mole")
-    ret_p = kwargs["target_p"]
+    # ret_p = kwargs["target_p"]
 
     with open(os.path.join(l_p, "system.xml"), "r") as f:
         system = XmlSerializer.deserialize(f.read())
@@ -140,14 +193,14 @@ def calc_properties(**kwargs) -> dict:
         eps_infty = prefactor00 * (1 / average_volumes) * sum_alphas + 1
 
         ret = {
-            "High Frequency Dielectric": eps_infty,
-            "Dielectric Constant": eps + eps_infty,
+            "eps_infty": eps_infty,
+            "epsilon": eps + eps_infty,
         }
 
     else:
         ret = {
-            "High Frequency Dielectric": 0.0,
-            "Dielectric Constant": eps + 1,
+            "eps_infty": 0.0,
+            "epsilon": eps + 1,
         }
 
     # H = E + PV
@@ -170,10 +223,10 @@ def calc_properties(**kwargs) -> dict:
     kappa = 1e6 * (1 / kb / t) * ((v_l**2).mean() - (v_l.mean()) ** 2) / v_l.mean()
 
     ret |= {
-        "Hvap (kJ/mol)": hvap.magnitude,
-        "Thermal Expansion (10^-4 K^-1)": alpha.magnitude,
-        "Isothermal Compressibility (10^-6 bar^-1)": kappa.to("1/bar").magnitude,
-        "Density (g/mL)": kwargs["Density (g/mL)"],
+        "hvap": hvap.magnitude,
+        "alpha": alpha.magnitude,
+        "kappa": kappa.to("1/bar").magnitude,
+        "rho": kwargs["Density (g/mL)"],
         "Speed (ns/day)": kwargs["Speed (ns/day)"],
         "Box Volume (nm^3)": kwargs["Box Volume (nm^3)"].mean(axis=0),
     }
@@ -181,88 +234,50 @@ def calc_properties(**kwargs) -> dict:
     return ret
 
 
-def objective(**kwargs) -> float:
-    """
-    Calculate the objecitve of this optimization
-
-    :return: the objective
-    :rtype: float
-    """
-    # https://pubs.acs.org/doi/10.1021/jz500737m
-    eps = 78.5
-    density = 0.997  # g/mL
-    hvap = 44.01568  # (kJ/mol)
-    alpha = 2.56
-    kappa = 45.3
-
-    calc_eps = kwargs["Dielectric Constant"]
-    calc_density = kwargs["Density (g/mL)"]
-    calc_hvap = kwargs["Hvap (kJ/mol)"]
-    calc_alpha = kwargs["Thermal Expansion (10^-4 K^-1)"]
-    calc_kappa = kwargs["Isothermal Compressibility (10^-6 bar^-1)"]
-
-    # absolute error percent
-    abp = (
-        lambda x, y: abs(x - y) / y
-    )  # W: E731 do not assign a lambda expression, use a def
-
-    objt = np.array(
-        [
-            abp(a, b)
-            for a, b in zip(
-                [calc_eps, calc_density, calc_hvap, calc_alpha, calc_kappa],
-                [eps, density, hvap, alpha, kappa],
-            )
-        ]
-    ).mean()
-    return objt
-
-
 class Worker:
-    def __init__(self, work_path: str):
-        """
-        Perform optimization
-
-        :param work_path: the path to store all intermediate data
-        :type work_path: str
-        """
+    def __init__(self, work_path: str, template_path: str):
         self.iteration = 1
         self.work_path = work_path
+        self.template_path = template_path
 
-    def worker(self, input_array: np.array, **kwargs) -> float:
-        """
-        The main function to perform optimization
+        self.parameter_template = json.load(
+            open(os.path.join(self.template_path, "parameters.json", "r"))
+        )
+        self.penalty_priors = [v["prior"] for _, v in self.parameter_template.items()]
+        self.prior = [v["initial"] for _, v in self.parameter_template.items()]
 
-        :param input_array: input array splitted out by scipy optimizer
-        :type input_array: np.array
-        :return: return the objective to feed to the optimizer
-        :rtype: float
-        """
+        self.references = pd.read_csv(
+            os.path.join(self.template_path, "references.csv")
+        )
+        self.properties = self.references["property"]
+        self.experiment = self.references["expt"]
+        _weights = self.references["weight"]
+        self.weights = _weights / _weights.sum(axis=0)
 
+        # the force field xml template
+        self.ff_file = os.path.join(self.template_path, "forcefield.xml")
+
+    def worker(self, input_array, **kwargs):
         print("Running iteration:    ", self.iteration)
 
-        param_template = json.load(open("parameters.json", "r"))
+        # prepare new force field file with new parameters from the optimizer
+        new_param = update_from_template(input_array, self.parameter_template)
+        new_ff = update_ffxml(self.ff_file, new_param)
 
-        new_param = update_results(input_array, param_template)
-
-        new_ff = update_ff("forcefield.xml", new_param)
-
-        cwd = os.getcwd()
-
+        # prepare simulation files and change to the directory
         iter_path = os.path.join(self.work_path, f"iter_{self.iteration:03d}")
-
-        shutil.copytree(os.path.join(cwd, "run_scripts"), iter_path)
-
+        shutil.copytree(os.path.join(self.template_path, "run"), iter_path)
         os.chdir(iter_path)
 
-        json.dump(new_param, open("parameters.json", "w"))
-
+        # dump current parameters and force field
+        json.dump(new_param, open("parameters.json", "w"), indent=2)
         with open("forcefield.xml", "w") as f:
             f.write(new_ff)
 
         shutil.copy2("forcefield.xml", os.path.join(iter_path, "l"))
         shutil.copy2("forcefield.xml", os.path.join(iter_path, "g"))
 
+        # run simulations
         os.system("sh runlocal.sh")
 
         input_data = json.load(open(os.path.join(iter_path, "l", "input.json"), "r"))
@@ -273,8 +288,6 @@ class Worker:
 
         l_pdb = PDBFile(os.path.join(l_p, "output.pdb"))
         nmol = l_pdb.topology.getNumResidues()
-
-        ff_path = os.path.join(l_p, input_data["forcefield"])
 
         input_data |= {
             "Total Energy (kJ/mole)": l_log["Total Energy (kJ/mole)"].values,
@@ -287,17 +300,21 @@ class Worker:
             "nmols": nmol,
             "l_p": l_p,
             "g_p": g_p,
-            "target_p": iter_path,
-            "ff_p": ff_path,
         }
 
-        properties = calc_properties(**input_data)
+        calced = calc_properties(**input_data)
 
-        objt = objective(**properties)
+        properties = {"properties": {p:calced[p] for p in self.properties}
 
-        properties |= {"objective": objt}
+        objt = self.objective(**properties)
 
-        json.dump(properties, open("properties.json", "w"), indent=2)
+        properties |= {
+            "objective": objt,
+            "current_params": input_array,
+            "weights": {p: self.weights[idx] for idx, p in enumerate(self.properties)},
+            "expt": {p: self.experiment[idx] for idx, p in enumerate(self.properties)}
+        }
+        json.dump(properties, open("properties.json", "w"), indent=2, cls=NumpyEncoder)
 
         self.iteration += 1
 
@@ -305,51 +322,57 @@ class Worker:
 
         return objt
 
-    def optimize(self, prior: np.array) -> scipy.optimize.OptimizeResult:
-        """
-        Perform optimization with scipy minimizer "Nelder-Mead"
+    def objective(self, **kwargs):
+        current_params = kwargs["current_params"]
+        nparams = len(current_params)
 
-        :param prior: Guess parameters
-        :type prior: np.array
-        :return: return the optimization result object
-        :rtype: scipy.optimize.OptimizeResult
-        """
+        # absolute error percent
+        abp = lambda x, y, z: (abs(x - y) / y) * z
+
+        objt = np.array(
+            [
+                abp(a, b, c)
+                for a, b, c in zip(
+                    [kwargs[p] for p in self.properties], self.experiment, self.weights
+                )
+            ]
+        )
+
+        p = (
+            lambda x, y: np.square(
+                (current_params[x] - self.prior[x]) / self.penalty_priors[x]
+            )
+            * y
+        )
+
+        ret_penalties = np.sum([p(i, objt) for i in range(nparams)])
+
+        objt += ret_penalties
+
+        return objt
+
+    def optimize(self, opt_method="Nelder-Mead"):
         res = minimize(
             self.worker,
-            prior,
-            method="Nelder-Mead",
-            bounds=(
-                (0.0957, 0.1),
-                (1.82, 1.91),
-                (0.315, 0.318),
-                (0.59, 0.684),
-                (-0.89517, -0.675),
-            ),
+            self.priors,
+            method=opt_method,
         )
-        """
-        bounds:
-        bond length
-        angle
-        sigma
-        epsilon
-        401 c0
-        """
+
         return res
 
 
 if __name__ == "__main__":
-
     cwd = os.getcwd()
-    prior = np.loadtxt(os.path.join(cwd, "prior.dat"))
 
     work_path = os.path.join(cwd, "simulations")
+    template_path = os.path.join(cwd, "templates")
 
     if os.path.exists(work_path):
         shutil.rmtree(work_path)
 
     os.makedirs(work_path)
 
-    wworker = Worker(work_path=work_path)
-    results = wworker.optimize(prior)
+    wworker = Worker(work_path=work_path, template_path=template_path)
+    results = wworker.optimize()
 
     print(resutls)

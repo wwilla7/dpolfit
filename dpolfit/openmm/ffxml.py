@@ -119,7 +119,7 @@ def update_results(input_array: np.array, parameters: dict) -> dict:
 
     # tests:
     # data = json.load(open("updates.json", "r"))
-    # ret = update_results(np.random.rand(7), data)
+    # ret = update_from_template(np.random.rand(7), data)
     # print(ret)
 
     :param input_array: [TODO:description]

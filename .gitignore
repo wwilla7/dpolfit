@@ -114,3 +114,5 @@ dpolfit/data/
 */timer.dat
 */*/timer.dat
 dpolfit/examples/*.json
+.idea/
+dpolfit/optimization/*
