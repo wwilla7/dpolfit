@@ -12,18 +12,19 @@ import pandas as pd
 import pint
 from lxml import etree
 from numpyencoder import NumpyEncoder
-from openmm import (AmoebaMultipoleForce, LangevinIntegrator, NonbondedForce,
-                    Platform, XmlSerializer, unit)
+from openmm import (
+    AmoebaMultipoleForce,
+    LangevinIntegrator,
+    NonbondedForce,
+    Platform,
+    XmlSerializer,
+    unit,
+)
 from openmm.app import PDBFile, Simulation
 from scipy.optimize import minimize
 
 ureg = pint.UnitRegistry()
 Q_ = ureg.Quantity
-
-property_reference = pd.read_csv(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "references.csv"),
-    index_col="property",
-)
 
 parameter_names = {
     "./HarmonicBondForce/Bond[@class1='401'][@class2='402']": "length",
@@ -91,7 +92,6 @@ def calc_properties(**kwargs):
     kb = Q_(1, ureg.boltzmann_constant).to("kJ/kelvin")
     na = Q_(1, "N_A")
     kb_u = (kb / (1 / na).to("mole")).to("kJ/kelvin/mole")
-    # ret_p = kwargs["target_p"]
 
     with open(os.path.join(l_p, "system.xml"), "r") as f:
         system = XmlSerializer.deserialize(f.read())
@@ -241,7 +241,7 @@ class Worker:
         self.template_path = template_path
 
         self.parameter_template = json.load(
-            open(os.path.join(self.template_path, "parameters.json", "r"))
+            open(os.path.join(self.template_path, "parameters.json"), "r")
         )
         self.penalty_priors = [v["prior"] for _, v in self.parameter_template.items()]
         self.prior = [v["initial"] for _, v in self.parameter_template.items()]
@@ -256,6 +256,7 @@ class Worker:
 
         # the force field xml template
         self.ff_file = os.path.join(self.template_path, "forcefield.xml")
+        self.cwd = os.getcwd()
 
     def worker(self, input_array, **kwargs):
         print("Running iteration:    ", self.iteration)
@@ -266,19 +267,22 @@ class Worker:
 
         # prepare simulation files and change to the directory
         iter_path = os.path.join(self.work_path, f"iter_{self.iteration:03d}")
-        shutil.copytree(os.path.join(self.template_path, "run"), iter_path)
-        os.chdir(iter_path)
+        if os.path.exists(iter_path):
+            pass
+        else:
+            shutil.copytree(os.path.join(self.template_path, "run"), iter_path)
+            os.chdir(iter_path)
 
-        # dump current parameters and force field
-        json.dump(new_param, open("parameters.json", "w"), indent=2)
-        with open("forcefield.xml", "w") as f:
-            f.write(new_ff)
+            # dump current parameters and force field
+            json.dump(new_param, open("parameters.json", "w"), indent=2)
+            with open("forcefield.xml", "w") as f:
+                f.write(new_ff)
 
-        shutil.copy2("forcefield.xml", os.path.join(iter_path, "l"))
-        shutil.copy2("forcefield.xml", os.path.join(iter_path, "g"))
+            shutil.copy2("forcefield.xml", os.path.join(iter_path, "l"))
+            shutil.copy2("forcefield.xml", os.path.join(iter_path, "g"))
 
-        # run simulations
-        os.system("sh runlocal.sh")
+            # run simulations
+            os.system("sh runlocal.sh")
 
         input_data = json.load(open(os.path.join(iter_path, "l", "input.json"), "r"))
         l_p = os.path.join(iter_path, "l")
@@ -304,21 +308,21 @@ class Worker:
 
         calced = calc_properties(**input_data)
 
-        properties = {"properties": {p:calced[p] for p in self.properties}
+        properties = {"properties": {p: calced[p] for p in self.properties}}
+        properties |= {"current_params": input_array}
 
         objt = self.objective(**properties)
 
         properties |= {
             "objective": objt,
-            "current_params": input_array,
             "weights": {p: self.weights[idx] for idx, p in enumerate(self.properties)},
-            "expt": {p: self.experiment[idx] for idx, p in enumerate(self.properties)}
+            "expt": {p: self.experiment[idx] for idx, p in enumerate(self.properties)},
         }
-        json.dump(properties, open("properties.json", "w"), indent=2, cls=NumpyEncoder)
+        json.dump(properties, open(os.path.join(iter_path, "properties.json"), "w"), indent=2, cls=NumpyEncoder)
 
         self.iteration += 1
 
-        os.chdir(cwd)
+        os.chdir(self.cwd)
 
         return objt
 
@@ -333,10 +337,10 @@ class Worker:
             [
                 abp(a, b, c)
                 for a, b, c in zip(
-                    [kwargs[p] for p in self.properties], self.experiment, self.weights
+                    [kwargs["properties"][p] for p in self.properties], self.experiment, self.weights
                 )
             ]
-        )
+        ).sum()
 
         p = (
             lambda x, y: np.square(
@@ -347,14 +351,17 @@ class Worker:
 
         ret_penalties = np.sum([p(i, objt) for i in range(nparams)])
 
+
         objt += ret_penalties
+
+        print("objective:", objt)
 
         return objt
 
     def optimize(self, opt_method="Nelder-Mead"):
         res = minimize(
             self.worker,
-            self.priors,
+            self.prior,
             method=opt_method,
         )
 
@@ -375,4 +382,4 @@ if __name__ == "__main__":
     wworker = Worker(work_path=work_path, template_path=template_path)
     results = wworker.optimize()
 
-    print(resutls)
+    print(results)
