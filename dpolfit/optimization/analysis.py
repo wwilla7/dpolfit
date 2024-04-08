@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 from dpolfit.optimization.optimization import parameter_names
 from lxml import etree
+import importlib_resources
 
 plt.rcParams.update(
     {
@@ -169,13 +170,15 @@ def make_sub_plots(
         xplots,
         figsize=(xplots * plot_size, yplots * plot_size),
         dpi=256,
-        sharex=True,
+        sharex=False,
     )
     xcount = 0
     ycount = 0
 
-    fun = {True: lambda x, k: calc_relative_errors(x, reference.loc[k, "expt"]),
-           False: lambda x, k: x}
+    fun = {
+        True: lambda x, k: calc_relative_errors(x, reference.loc[k, "expt"]),
+        False: lambda x, k: x,
+    }
 
     for k in reference.index:
         if yplots > 1:
@@ -221,7 +224,7 @@ def make_sub_plots(
             ycount += 1
 
     h, l = ax.get_legend_handles_labels()
-    fig.legend(h, l, loc="lower right", fontsize=16)
+    fig.legend(h, l, loc="lower left", fontsize=16, frameon=False, bbox_to_anchor=(0.9, 0.25))
     [fig.delaxes(a) for a in axs.flatten()[nplots:]]
     fig.tight_layout()
     return fig
@@ -242,26 +245,32 @@ def main(wd):
     )
     property_reference = property_reference.drop(columns=["weight"])
 
-    figs = ["prop", "rmae", "param"]
+    figs = ["prop", "rmae", "param", "objt"]
 
     for d, r, re, n in zip(
-        [df, df, df],
-        [property_reference, property_reference, parameter_references],
-        [False, True, False],
+        [df, df, df, df],
+        [property_reference, property_reference, parameter_references, pd.DataFrame(index=["objective"])],
+        [False, True, False, False],
         figs,
     ):
         fig = make_sub_plots(data=d, reference=r, xplots=4, plot_size=4, re=re)
-        fig.savefig(f"{n}.png", dpi=256)
+        fig.savefig(f"{n}.png", dpi=256, bbox_inches="tight")
 
-    my_jinja2_env = latex_jinja_env(search_path="templates")
+    my_jinja2_env = latex_jinja_env(
+        search_path=importlib_resources.files("dpolfit").joinpath(
+            os.path.join("data", "templates")
+        )
+    )
+    # my_jinja2_env = latex_jinja_env(search_path="templates")
     template = my_jinja2_env.get_template("template.tex")
 
     ret = template.render(
+        tprop="prop.png",
+        tobjt="objt.png",
         BestResult=bestresult,
-        caption=f"iteration {best}/{len(df)}",
+        caption=f"Best result found at iteration {best}/{len(df)}",
         frametitle="Optimization",
         tabular=table,
-        tprop="prop.png",
         trmae="rmae.png",
         tparm="param.png",
     )
@@ -270,7 +279,9 @@ def main(wd):
         f.write(ret)
 
     os.system("pdflatex main.tex")
-    os.system("open main.pdf")
+    os.system("zathura main.pdf")
+
+    df.to_csv("data.csv", index=False)
 
 
 if __name__ == "__main__":

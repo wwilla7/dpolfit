@@ -360,11 +360,12 @@ class Worker:
 
         return objt
 
-    def optimize(self, opt_method="Nelder-Mead"):
+    def optimize(self, opt_method="Nelder-Mead", bounds=None):
         res = minimize(
             self.worker,
             self.prior,
             method=opt_method,
+            bounds=bounds
         )
 
         return res
