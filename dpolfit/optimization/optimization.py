@@ -46,8 +46,10 @@ def update_ffxml(ff_file: str, parameters: dict) -> str:
     root = tree.getroot()
 
     for k, v in parameters.items():
-        ret = root.find(k)
-        ret.set(parameter_names[k], str(v["value"]))
+        # findall instead of find in case there are reused parameters, such as thole
+        ret = root.findall(k)
+        for p in ret:
+            p.set(parameter_names[k], str(v["value"]))
 
     q1 = root.find("./AmoebaMultipoleForce/Multipole[@type='401']")
     q2 = root.find("./AmoebaMultipoleForce/Multipole[@type='402']")

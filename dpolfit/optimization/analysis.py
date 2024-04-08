@@ -90,6 +90,7 @@ def property_latex(iteration_path) -> str:
     }
     dt = pd.DataFrame(data)
     dt.index.name = "Property"
+    dt = dt.rename(index=tex_names)
     dt = dt.reset_index()
 
     styler = dt.style
@@ -239,6 +240,7 @@ def main(wd):
     property_reference = pd.read_csv(
         os.path.join("templates", "references.csv"), index_col="property"
     )
+    property_reference = property_reference.drop(columns=["weight"])
 
     figs = ["prop", "rmae", "param"]
 
