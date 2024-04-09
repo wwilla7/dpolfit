@@ -270,7 +270,9 @@ class Worker:
         # prepare simulation files and change to the directory
         iter_path = os.path.join(self.work_path, f"iter_{self.iteration:03d}")
         if os.path.exists(iter_path):
-            pass
+            ret = json.load(open(os.path.join(iter_path, "properties.json"), "r"))
+            objt = ret["objective"]
+            print(f"Restarting, previously estimated objective: {objt:.5f}")
         else:
             shutil.copytree(os.path.join(self.template_path, "run"), iter_path)
             os.chdir(iter_path)
@@ -286,41 +288,52 @@ class Worker:
             # run simulations
             os.system("sh runlocal.sh")
 
-        input_data = json.load(open(os.path.join(iter_path, "l", "input.json"), "r"))
-        l_p = os.path.join(iter_path, "l")
-        g_p = os.path.join(iter_path, "g")
-        l_log = pd.read_csv(os.path.join(l_p, "simulation.log"), skiprows=[1])
-        g_log = pd.read_csv(os.path.join(g_p, "simulation.log"), skiprows=[1])
+            input_data = json.load(
+                open(os.path.join(iter_path, "l", "input.json"), "r")
+            )
+            l_p = os.path.join(iter_path, "l")
+            g_p = os.path.join(iter_path, "g")
+            l_log = pd.read_csv(os.path.join(l_p, "simulation.log"), skiprows=[1])
+            g_log = pd.read_csv(os.path.join(g_p, "simulation.log"), skiprows=[1])
 
-        l_pdb = PDBFile(os.path.join(l_p, "output.pdb"))
-        nmol = l_pdb.topology.getNumResidues()
+            l_pdb = PDBFile(os.path.join(l_p, "output.pdb"))
+            nmol = l_pdb.topology.getNumResidues()
 
-        input_data |= {
-            "Total Energy (kJ/mole)": l_log["Total Energy (kJ/mole)"].values,
-            "Total Energy (kJ/mole) (gas)": g_log["Total Energy (kJ/mole)"].mean(
-                axis=0
-            ),
-            "Density (g/mL)": l_log["Density (g/mL)"].mean(axis=0),
-            "Speed (ns/day)": l_log["Speed (ns/day)"].mean(axis=0),
-            "Box Volume (nm^3)": l_log["Box Volume (nm^3)"].values,
-            "nmols": nmol,
-            "l_p": l_p,
-            "g_p": g_p,
-        }
+            input_data |= {
+                "Total Energy (kJ/mole)": l_log["Total Energy (kJ/mole)"].values,
+                "Total Energy (kJ/mole) (gas)": g_log["Total Energy (kJ/mole)"].mean(
+                    axis=0
+                ),
+                "Density (g/mL)": l_log["Density (g/mL)"].mean(axis=0),
+                "Speed (ns/day)": l_log["Speed (ns/day)"].mean(axis=0),
+                "Box Volume (nm^3)": l_log["Box Volume (nm^3)"].values,
+                "nmols": nmol,
+                "l_p": l_p,
+                "g_p": g_p,
+            }
 
-        calced = calc_properties(**input_data)
+            calced = calc_properties(**input_data)
 
-        properties = {"properties": {p: calced[p] for p in self.properties}}
-        properties |= {"current_params": input_array}
+            properties = {"properties": {p: calced[p] for p in self.properties}}
+            properties |= {"current_params": input_array}
 
-        objt = self.objective(**properties)
+            objt = self.objective(**properties)
 
-        properties |= {
-            "objective": objt,
-            "weights": {p: self.weights[idx] for idx, p in enumerate(self.properties)},
-            "expt": {p: self.experiment[idx] for idx, p in enumerate(self.properties)},
-        }
-        json.dump(properties, open(os.path.join(iter_path, "properties.json"), "w"), indent=2, cls=NumpyEncoder)
+            properties |= {
+                "objective": objt,
+                "weights": {
+                    p: self.weights[idx] for idx, p in enumerate(self.properties)
+                },
+                "expt": {
+                    p: self.experiment[idx] for idx, p in enumerate(self.properties)
+                },
+            }
+            json.dump(
+                properties,
+                open(os.path.join(iter_path, "properties.json"), "w"),
+                indent=2,
+                cls=NumpyEncoder,
+            )
 
         self.iteration += 1
 
@@ -339,7 +352,9 @@ class Worker:
             [
                 abp(a, b, c)
                 for a, b, c in zip(
-                    [kwargs["properties"][p] for p in self.properties], self.experiment, self.weights
+                    [kwargs["properties"][p] for p in self.properties],
+                    self.experiment,
+                    self.weights,
                 )
             ]
         ).sum()
@@ -353,7 +368,6 @@ class Worker:
 
         ret_penalties = np.sum([p(i, objt) for i in range(nparams)])
 
-
         objt += ret_penalties
 
         print("objective:", objt)
@@ -361,12 +375,7 @@ class Worker:
         return objt
 
     def optimize(self, opt_method="Nelder-Mead", bounds=None):
-        res = minimize(
-            self.worker,
-            self.prior,
-            method=opt_method,
-            bounds=bounds
-        )
+        res = minimize(self.worker, self.prior, method=opt_method, bounds=bounds)
 
         return res
 
