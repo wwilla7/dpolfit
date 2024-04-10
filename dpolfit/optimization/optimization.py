@@ -370,8 +370,6 @@ class Worker:
 
         objt += ret_penalties
 
-        print("objective:", objt)
-
         return objt
 
     def optimize(self, opt_method="Nelder-Mead", bounds=None):
