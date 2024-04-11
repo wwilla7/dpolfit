@@ -24,6 +24,8 @@ tex_names = {
     "hvap": "Heat of Vaporization (kJ/mol)",
     "alpha": "Thermal Expansion ($10^{-4} \\textrm{K}^{-1}$)",
     "kappa": "Isothermal Compressibility ($10^{-6} \\textrm{bar}^{-1}$)",
+    "gas_mu": "Gas Phase Dipole Moment (D)",
+    "condensed_mu": "Condensed Phase Dipole Moment (D)",
 }
 
 plot_colors = [
@@ -102,6 +104,7 @@ def property_latex(iteration_path) -> str:
     styler.set_properties(**{"scriptsize": "--rwrap"})
 
     table = styler.to_latex(hrules=True)
+    table=table.replace("2.9", "2.5-3.1")
 
     return table
 
@@ -160,10 +163,21 @@ def parameter_latex(iteration_path: str) -> str:
 
 
 def make_sub_plots(
-    data: pd.DataFrame, reference: pd.DataFrame, xplots=4, plot_size=4, re=False
+    data: pd.DataFrame,
+    reference: pd.DataFrame,
+    xplots=4,
+    plot_size=4,
+    re=False,
+    xdata="iteration",
+    ylabel="Calculated",
+    label0=True,
+    fontsize=16,
+    othermodel=True,
+    vline=None,
 ):
     nplots = len(reference)
     yplots = np.ceil(nplots / xplots).astype(int)
+    best = data.loc[data["objective"] == data["objective"].min(), "iteration"].values[0]
 
     fig, axs = plt.subplots(
         yplots,
@@ -187,34 +201,56 @@ def make_sub_plots(
             ax = axs[xcount]
 
         y = fun[re](data[k], k)
+        ax.scatter(data[xdata], y)
 
-        [
-            (
-                ax.axhline(
-                    y=fun[re](y, k),
-                    c=plot_colors[idx],
-                    ls="--",
-                    label=l,
+        if othermodel:
+            [
+                (
+                    ax.axhline(
+                        y=fun[re](y, k),
+                        c=plot_colors[idx],
+                        ls="--",
+                        label=l,
+                    )
+                    if l != "expt"
+                    else ""
                 )
-                if l != "expt"
-                else ""
-            )
-            for idx, (y, l) in enumerate(
-                zip(reference.loc[k].values, reference.loc[k].index)
-            )
-        ]
+                for idx, (y, l) in enumerate(
+                    zip(reference.loc[k].values, reference.loc[k].index)
+                )
+            ]
 
-        ax.scatter(data["iteration"], y)
+        else:
+            if "expt" in reference.columns:
+                ax.axhline(
+                    y=fun[re](reference.loc[k, "expt"], k),
+                    c="red",
+                    ls="--",
+                    label="expt",
+                )
+
+            elif vline is not None:
+                ax.axvline(x=vline, ls="--", c="red", label="ref: {:.3f}".format(vline))
+
+        if label0:
+            ax.scatter(
+                data.loc[data["iteration"] == best][xdata],
+                fun[re](data.loc[data["iteration"] == best][k], k),
+                marker="*",
+                s=50,
+                color="red",
+                label="Best",
+            )
 
         # add reference line
 
         ax.grid(ls="--")
         try:
-            ax.set_title(tex_names[k])
+            ax.set_title(tex_names[k], fontsize=fontsize)
         except KeyError:
-            ax.set_title(k)
-        ax.set_xlabel("Iteration")
-        ax.set_ylabel("Calculated")
+            ax.set_title(k.title(), fontsize=fontsize)
+        ax.set_xlabel(xdata.title(), fontsize=fontsize)
+        ax.set_ylabel(ylabel.title(), fontsize=fontsize)
         ax.set_box_aspect(1.0)
 
         if xcount < xplots - 1:
@@ -224,15 +260,57 @@ def make_sub_plots(
             ycount += 1
 
     h, l = ax.get_legend_handles_labels()
-    fig.legend(h, l, loc="lower left", fontsize=16, frameon=False, bbox_to_anchor=(0.9, 0.25))
+    fig.legend(
+        h,
+        l,
+        loc="lower left",
+        fontsize=fontsize + 3,
+        frameon=False,
+        bbox_to_anchor=(0.9, 0.25),
+    )
     [fig.delaxes(a) for a in axs.flatten()[nplots:]]
     fig.tight_layout()
     return fig
 
 
-def main(wd):
+def _parameter_sub_plots(
+    wd, df: pd.DataFrame = None, xplots=4, plot_size=4, fontsize=9
+):
+
     os.chdir(wd)
-    df = make_dataframe("simulations")
+
+    if df is None:
+        df = make_dataframe("simulations")
+
+    parameter_references = pd.read_csv(
+        os.path.join("templates", "parameters.csv"), index_col="Parameter"
+    )
+    property_reference = pd.read_csv(
+        os.path.join("templates", "references.csv"), index_col="property"
+    )
+    property_reference = property_reference.drop(columns=["weight"])
+
+    for param in property_reference.index:
+        fig = make_sub_plots(
+            data=df,
+            reference=parameter_references,
+            xplots=xplots,
+            plot_size=plot_size,
+            re=False,
+            xdata=param,
+            ylabel="Parameter Value",
+            fontsize=fontsize,
+            othermodel=False,
+            vline=property_reference.loc[param, "expt"],
+        )
+        fig.savefig(f"{param.replace('_', '-')}.png", dpi=256, bbox_inches="tight")
+
+
+def main(wd, df: pd.DataFrame = None):
+    os.chdir(wd)
+    if df is None:
+        df = make_dataframe(os.path.join(wd, "simulations"))
+
     best = df.loc[df["objective"] == df["objective"].min(), "iteration"].values[0]
     optimal_path = os.path.join("simulations", f"iter_{best:03d}")
     bestresult = property_latex(optimal_path)
@@ -247,14 +325,34 @@ def main(wd):
 
     figs = ["prop", "rmae", "param", "objt"]
 
-    for d, r, re, n in zip(
+    for d, r, re, n, l, o, fs in zip(
         [df, df, df, df],
-        [property_reference, property_reference, parameter_references, pd.DataFrame(index=["objective"])],
+        [
+            property_reference,
+            property_reference,
+            parameter_references,
+            pd.DataFrame(index=["objective"]),
+        ],
         [False, True, False, False],
         figs,
+        [True, True, True, False],
+        [False, True, True, False],
+        [16, 16, 9, 16],
     ):
-        fig = make_sub_plots(data=d, reference=r, xplots=4, plot_size=4, re=re)
+        fig = make_sub_plots(
+            data=d,
+            reference=r,
+            xplots=4,
+            plot_size=4,
+            re=re,
+            label0=l,
+            othermodel=o,
+            fontsize=fs,
+        )
         fig.savefig(f"{n}.png", dpi=256, bbox_inches="tight")
+
+    # additional analysis
+    _parameter_sub_plots(wd, df=df)
 
     my_jinja2_env = latex_jinja_env(
         search_path=importlib_resources.files("dpolfit").joinpath(
@@ -273,15 +371,16 @@ def main(wd):
         tabular=table,
         trmae="rmae.png",
         tparm="param.png",
+        properties=[p.replace("_", "-") for p in property_reference.index],
     )
 
     with open("main.tex", "w") as f:
         f.write(ret)
 
     os.system("pdflatex main.tex")
-    os.system("zathura main.pdf")
+    os.system("zathura main.pdf &")
 
-    df.to_csv("data.csv", index=False)
+    # df.to_csv("data.csv", index=False)
 
 
 if __name__ == "__main__":

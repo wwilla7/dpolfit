@@ -22,6 +22,7 @@ from openmm import (
 )
 from openmm.app import PDBFile, Simulation
 from scipy.optimize import minimize
+from glob import glob
 
 ureg = pint.UnitRegistry()
 Q_ = ureg.Quantity
@@ -94,7 +95,7 @@ def dipole_moments(
 
     data = []
     for res in residues:
-        atom_indices = [a.index for a in res.atoms]
+        atom_indices = [a.index for a in res.atoms()]
         permanent_dipoles = positions[atom_indices] * charges[atom_indices].reshape(
             -1, 1
         )
@@ -211,6 +212,7 @@ def calc_properties(**kwargs):
     eps = prefactor * variance * (1 / average_volumes)
 
     if amoeba:
+        del qs
         parameters = [
             MultForce.getMultipoleParameters(ni)
             for ni in range(system.getNumParticles())
@@ -253,36 +255,37 @@ def calc_properties(**kwargs):
     # dipole moments
     # gas phase
     gas_pdb = PDBFile(os.path.join(g_p, "output.pdb"))
-    gas_positions = np.array(gas_pdb.positions.value_in_unit(unit.namometer))
+    gas_positions = gas_pdb.positions
     gas_residues = gas_pdb.topology.residues()
     # there is not induced dipoles on molecules that don't contain 1-4 and above connectivity
     gas_natoms = gas_pdb.topology.getNumAtoms()
 
-    # get charge from the first natoms in condensed phase system
+    with open(os.path.join(g_p, "system.xml"), "r") as f:
+        gas_system = XmlSerializer.deserialize(f.read())
     for idx, force in enumerate(gas_system.getForces()):
         if isinstance(force, AmoebaMultipoleForce):
             GasMultForce = force
-        if isinstance(force, NonbondedForce):
-            gas_qs = [
-                force.getParticleParameters(i)[0] / unit.elementary_charge
-                for i in range(system.getNumParticles())
-            ]
+            gas_qs = np.array(
+                [
+                    GasMultForce.getMultipoleParameters(ni)[0].value_in_unit(
+                        unit.elementary_charge
+                    )
+                    for ni in range(gas_natoms)
+                ]
+            )
+        if isinstance(force, NonbondedForce) and not amoeba:
+            gas_qs = np.array(
+                [
+                    force.getParticleParameters(i)[0] / unit.elementary_charge
+                    for i in range(gas_natoms)
+                ]
+            )
 
     if gas_natoms < 4 or not amoeba:
-        induced = np.zeros((gas_residues, 3), dtype=float)
+        induced = np.zeros((gas_natoms, 3), dtype=float)
     else:
-        with open(os.path.join(g_p, "system.xml"), "r") as f:
-            gas_system = XmlSerializer.deserialize(f.read())
         gas_integrator = LangevinIntegrator(
             t.magnitude * unit.kelvin, 1 / unit.picosecond, 2 * unit.femtoseconds
-        )
-        gas_qs = np.array(
-            [
-                GasMultForce.getMultipoleParameters(ni)[0].value_in_unit(
-                    unit.elementary_charge
-                )
-                for ni in range(gas_natoms)
-            ]
         )
         gas_simulation = Simulation(
             gas_pdb.topology, gas_system, gas_integrator, myplatform, myproperties
@@ -291,7 +294,7 @@ def calc_properties(**kwargs):
         induced = GasMultForce.getInducedDipoles(gas_simulation.context)
 
     gas_dipole = dipole_moments(
-        positions=gas_positions,
+        positions=np.array(gas_positions.value_in_unit(unit.nanometer)),
         residues=gas_residues,
         charges=gas_qs,
         total_induced=induced,
@@ -299,10 +302,9 @@ def calc_properties(**kwargs):
 
     # condensed phase
 
-    condensed_positions = np.array(
-        traj.openmm_positions(frame=n_frames - 1).value_in_unit(unit.nanometer)
-    )
+    condensed_positions = traj.openmm_positions(frame=n_frames - 1)
     condensed_residues = pdb.topology.residues()
+    simulation.context.setPositions(condensed_positions)
 
     if amoeba:
         induced = MultForce.getInducedDipoles(simulation.context)
@@ -310,10 +312,10 @@ def calc_properties(**kwargs):
         induced = np.zeros((system.getNumParticles(), 3), dtype=float)
 
     condensed_dipole = dipole_moments(
-        positions=condensed_positions,
+        positions=np.array(condensed_positions.value_in_unit(unit.nanometer)),
         residues=condensed_residues,
         charges=qs,
-        total_induced=induced,
+        total_induced=np.array(induced),
     )
 
     ret |= {
@@ -354,6 +356,32 @@ class Worker:
         self.ff_file = os.path.join(self.template_path, "forcefield.xml")
         self.cwd = os.getcwd()
 
+    @staticmethod
+    def _prepare_input(iter_path):
+
+        input_data = json.load(open(os.path.join(iter_path, "l", "input.json"), "r"))
+        l_p = os.path.join(iter_path, "l")
+        g_p = os.path.join(iter_path, "g")
+        l_log = pd.read_csv(os.path.join(l_p, "simulation.log"), skiprows=[1])
+        g_log = pd.read_csv(os.path.join(g_p, "simulation.log"), skiprows=[1])
+
+        l_pdb = PDBFile(os.path.join(l_p, "output.pdb"))
+        nmol = l_pdb.topology.getNumResidues()
+
+        input_data |= {
+            "Total Energy (kJ/mole)": l_log["Total Energy (kJ/mole)"].values,
+            "Total Energy (kJ/mole) (gas)": g_log["Total Energy (kJ/mole)"].mean(
+                axis=0
+            ),
+            "Density (g/mL)": l_log["Density (g/mL)"].mean(axis=0),
+            "Speed (ns/day)": l_log["Speed (ns/day)"].mean(axis=0),
+            "Box Volume (nm^3)": l_log["Box Volume (nm^3)"].values,
+            "nmols": nmol,
+            "l_p": l_p,
+            "g_p": g_p,
+        }
+        return input_data
+
     def worker(self, input_array, **kwargs):
         print("Running iteration:    ", self.iteration)
 
@@ -382,30 +410,7 @@ class Worker:
             # run simulations
             os.system("sh runlocal.sh")
 
-            input_data = json.load(
-                open(os.path.join(iter_path, "l", "input.json"), "r")
-            )
-            l_p = os.path.join(iter_path, "l")
-            g_p = os.path.join(iter_path, "g")
-            l_log = pd.read_csv(os.path.join(l_p, "simulation.log"), skiprows=[1])
-            g_log = pd.read_csv(os.path.join(g_p, "simulation.log"), skiprows=[1])
-
-            l_pdb = PDBFile(os.path.join(l_p, "output.pdb"))
-            nmol = l_pdb.topology.getNumResidues()
-
-            input_data |= {
-                "Total Energy (kJ/mole)": l_log["Total Energy (kJ/mole)"].values,
-                "Total Energy (kJ/mole) (gas)": g_log["Total Energy (kJ/mole)"].mean(
-                    axis=0
-                ),
-                "Density (g/mL)": l_log["Density (g/mL)"].mean(axis=0),
-                "Speed (ns/day)": l_log["Speed (ns/day)"].mean(axis=0),
-                "Box Volume (nm^3)": l_log["Box Volume (nm^3)"].values,
-                "nmols": nmol,
-                "l_p": l_p,
-                "g_p": g_p,
-            }
-
+            input_data = Worker._prepare_input(iter_path)
             calced = calc_properties(**input_data)
 
             properties = {"properties": {p: calced[p] for p in self.properties}}
@@ -465,6 +470,39 @@ class Worker:
         objt += ret_penalties
 
         return objt
+
+    def evaluate(self):
+        iterations = glob(os.path.join(self.work_path, "iter_*"))
+        niter = len(iterations)
+        for i in range(1, niter, 1):
+            print(f"re-evaluate iteration {i} of {niter} ...")
+            iter_path = os.path.join(self.work_path, f"iter_{i:03d}")
+            input_data = Worker._prepare_input(iter_path)
+            prp = calc_properties(**input_data)
+            properties = json.load(
+                open(os.path.join(iter_path, "properties.json"), "r")
+            )
+
+            properties["properties"].update({p: prp[p] for p in self.properties})
+            objt = self.objective(**properties)
+            properties.update(
+                {
+                    "objective": objt,
+                    "weights": {
+                        p: self.weights[idx] for idx, p in enumerate(self.properties)
+                    },
+                    "expt": {
+                        p: self.experiment[idx] for idx, p in enumerate(self.properties)
+                    },
+                }
+            )
+
+            json.dump(
+                properties,
+                open(os.path.join(iter_path, "properties.json"), "w"),
+                indent=2,
+                cls=NumpyEncoder,
+            )
 
     def optimize(self, opt_method="Nelder-Mead", bounds=None):
         res = minimize(self.worker, self.prior, method=opt_method, bounds=bounds)
