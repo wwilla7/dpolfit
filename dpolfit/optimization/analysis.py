@@ -71,6 +71,12 @@ def make_dataframe(data_path: str) -> pd.DataFrame:
             this_data = {"iteration": i + 1, "objective": objt}
             this_data |= prp["properties"]
             this_data |= {k: v["value"] for k, v in params.items()}
+            try:
+                t = prp["temperature"]
+            except ValueError:
+                tmp = json.load(open(os.path.join(data_path, "iter_001", "run", "l", "input.json"), "r"))
+                t = tmp["temperature"]
+            this_data += {"temperature": t}
             data.append(this_data)
         except FileNotFoundError:
             pass

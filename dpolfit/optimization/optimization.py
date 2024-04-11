@@ -426,6 +426,7 @@ class Worker:
                 "expt": {
                     p: self.experiment[idx] for idx, p in enumerate(self.properties)
                 },
+                "temperature": input_data["temperature"],
             }
             json.dump(
                 properties,
@@ -445,7 +446,7 @@ class Worker:
         nparams = len(current_params)
 
         # absolute error percent
-        abp = lambda x, y, z: (abs(x - y) / y) * z
+        abp = lambda x, y, z: (abs(x - y) / abs(y)) * z
 
         objt = np.array(
             [
