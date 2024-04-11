@@ -5,7 +5,7 @@ import os
 import shutil
 from collections import defaultdict
 from datetime import datetime
-
+from typing import List, Dict, Generator
 import mdtraj as md
 import numpy as np
 import pandas as pd
@@ -84,6 +84,30 @@ def update_from_template(input_array: np.array, parameters: dict) -> dict:
     return parameters
 
 
+def dipole_moments(
+    positions: np.array,
+    residues: Generator,
+    charges: np.array,
+    total_induced: np.array,
+    **kwargs,
+):
+
+    data = []
+    for res in residues:
+        atom_indices = [a.index for a in res.atoms]
+        permanent_dipoles = positions[atom_indices] * charges[atom_indices].reshape(
+            -1, 1
+        )
+        induced_dipoles = total_induced[atom_indices]
+        total = permanent_dipoles + induced_dipoles
+        total_norm = np.linalg.norm(total.sum(axis=0))
+    data.append(total_norm)
+
+    average_dipoles = Q_(np.mean(data), "nm*e").to("debye").magnitude
+
+    return average_dipoles  # debye
+
+
 def calc_properties(**kwargs):
     e_l = Q_(kwargs["Total Energy (kJ/mole)"], "kJ/mole")
     e_g = Q_(kwargs["Total Energy (kJ/mole) (gas)"], "kJ/mole")
@@ -91,6 +115,7 @@ def calc_properties(**kwargs):
     n = kwargs["nmols"]
     t = Q_(float(kwargs["temperature"]), ureg.kelvin)
     l_p = kwargs["l_p"]
+    g_p = kwargs["g_p"]
     kb = Q_(1, ureg.boltzmann_constant).to("kJ/kelvin")
     na = Q_(1, "N_A")
     kb_u = (kb / (1 / na).to("mole")).to("kJ/kelvin/mole")
@@ -190,7 +215,8 @@ def calc_properties(**kwargs):
             MultForce.getMultipoleParameters(ni)
             for ni in range(system.getNumParticles())
         ]
-        alphas = np.array([p[-1] / (unit.nanometer**3) for p in parameters])
+        alphas = np.array([p[-1].value_in_unit(unit.nanometer**3) for p in parameters])
+        qs = np.array([p[0].value_in_unit(unit.elementary_charge) for p in parameters])
         sum_alphas = Q_(np.sum(alphas), "nm**3").to("a0**3").magnitude
         eps_infty = prefactor00 * (1 / average_volumes) * sum_alphas + 1
 
@@ -224,11 +250,79 @@ def calc_properties(**kwargs):
 
     kappa = 1e6 * (1 / kb / t) * ((v_l**2).mean() - (v_l.mean()) ** 2) / v_l.mean()
 
+    # dipole moments
+    # gas phase
+    gas_pdb = PDBFile(os.path.join(g_p, "output.pdb"))
+    gas_positions = np.array(gas_pdb.positions.value_in_unit(unit.namometer))
+    gas_residues = gas_pdb.topology.residues()
+    # there is not induced dipoles on molecules that don't contain 1-4 and above connectivity
+    gas_natoms = gas_pdb.topology.getNumAtoms()
+
+    # get charge from the first natoms in condensed phase system
+    for idx, force in enumerate(gas_system.getForces()):
+        if isinstance(force, AmoebaMultipoleForce):
+            GasMultForce = force
+        if isinstance(force, NonbondedForce):
+            gas_qs = [
+                force.getParticleParameters(i)[0] / unit.elementary_charge
+                for i in range(system.getNumParticles())
+            ]
+
+    if gas_natoms < 4 or not amoeba:
+        induced = np.zeros((gas_residues, 3), dtype=float)
+    else:
+        with open(os.path.join(g_p, "system.xml"), "r") as f:
+            gas_system = XmlSerializer.deserialize(f.read())
+        gas_integrator = LangevinIntegrator(
+            t.magnitude * unit.kelvin, 1 / unit.picosecond, 2 * unit.femtoseconds
+        )
+        gas_qs = np.array(
+            [
+                GasMultForce.getMultipoleParameters(ni)[0].value_in_unit(
+                    unit.elementary_charge
+                )
+                for ni in range(gas_natoms)
+            ]
+        )
+        gas_simulation = Simulation(
+            gas_pdb.topology, gas_system, gas_integrator, myplatform, myproperties
+        )
+        gas_simulation.context.setPositions(gas_positions)
+        induced = GasMultForce.getInducedDipoles(gas_simulation.context)
+
+    gas_dipole = dipole_moments(
+        positions=gas_positions,
+        residues=gas_residues,
+        charges=gas_qs,
+        total_induced=induced,
+    )
+
+    # condensed phase
+
+    condensed_positions = np.array(
+        traj.openmm_positions(frame=n_frames - 1).value_in_unit(unit.nanometer)
+    )
+    condensed_residues = pdb.topology.residues()
+
+    if amoeba:
+        induced = MultForce.getInducedDipoles(simulation.context)
+    else:
+        induced = np.zeros((system.getNumParticles(), 3), dtype=float)
+
+    condensed_dipole = dipole_moments(
+        positions=condensed_positions,
+        residues=condensed_residues,
+        charges=qs,
+        total_induced=induced,
+    )
+
     ret |= {
         "hvap": hvap.magnitude,
         "alpha": alpha.magnitude,
         "kappa": kappa.to("1/bar").magnitude,
         "rho": kwargs["Density (g/mL)"],
+        "gas_mu": gas_dipole,
+        "condensed_mu": condensed_dipole,
         "Speed (ns/day)": kwargs["Speed (ns/day)"],
         "Box Volume (nm^3)": kwargs["Box Volume (nm^3)"].mean(axis=0),
     }
