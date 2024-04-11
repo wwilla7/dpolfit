@@ -342,7 +342,7 @@ class Worker:
             open(os.path.join(self.template_path, "parameters.json"), "r")
         )
         self.penalty_priors = [v["prior"] for _, v in self.parameter_template.items()]
-        self.prior = [v["initial"] for _, v in self.parameter_template.items()]
+        self.prior = np.array([v["initial"] for _, v in self.parameter_template.items()])
 
         self.references = pd.read_csv(
             os.path.join(self.template_path, "references.csv")
