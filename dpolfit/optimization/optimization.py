@@ -134,10 +134,12 @@ def calc_properties(**kwargs):
             MultForce = force
             amoeba = True
         if isinstance(force, NonbondedForce):
-            qs = np.array([
-                force.getParticleParameters(i)[0] / unit.elementary_charge
-                for i in range(system.getNumParticles())
-            ])
+            qs = np.array(
+                [
+                    force.getParticleParameters(i)[0] / unit.elementary_charge
+                    for i in range(system.getNumParticles())
+                ]
+            )
 
     pdb_file = os.path.join(l_p, kwargs["output_pdb"])
     pdb = PDBFile(pdb_file)
@@ -342,7 +344,9 @@ class Worker:
             open(os.path.join(self.template_path, "parameters.json"), "r")
         )
         self.penalty_priors = [v["prior"] for _, v in self.parameter_template.items()]
-        self.prior = np.array([v["initial"] for _, v in self.parameter_template.items()])
+        self.prior = np.array(
+            [v["initial"] for _, v in self.parameter_template.items()]
+        )
 
         self.references = pd.read_csv(
             os.path.join(self.template_path, "references.csv")
