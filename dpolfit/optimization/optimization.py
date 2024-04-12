@@ -110,9 +110,9 @@ def dipole_moments(
 
 
 def calc_properties(**kwargs):
-    e_l = Q_(kwargs["Total Energy (kJ/mole)"], "kJ/mole")
-    e_g = Q_(kwargs["Total Energy (kJ/mole) (gas)"], "kJ/mole")
-    v_l = Q_(kwargs["Box Volume (nm^3)"], "nm**3")
+    e_l = Q_(kwargs["lE"], "kJ/mole")
+    e_g = Q_(kwargs["gE"], "kJ/mole")
+    v_l = Q_(kwargs["v"], "nm**3")
     n = kwargs["nmols"]
     t = Q_(float(kwargs["temperature"]), ureg.kelvin)
     l_p = kwargs["l_p"]
@@ -324,11 +324,11 @@ def calc_properties(**kwargs):
         "hvap": hvap.magnitude,
         "alpha": alpha.magnitude,
         "kappa": kappa.to("1/bar").magnitude,
-        "rho": kwargs["Density (g/mL)"],
+        "rho": kwargs["rho"],
         "gas_mu": gas_dipole,
         "condensed_mu": condensed_dipole,
-        "Speed (ns/day)": kwargs["Speed (ns/day)"],
-        "Box Volume (nm^3)": kwargs["Box Volume (nm^3)"].mean(axis=0),
+        "speed (ns/day)": kwargs["speed"],
+        "nmols": kwargs["nmols"],
     }
 
     return ret
@@ -373,24 +373,22 @@ class Worker:
         nmol = l_pdb.topology.getNumResidues()
 
         input_data |= {
-            "Total Energy (kJ/mole)": l_log["Total Energy (kJ/mole)"].values,
-            "Total Energy (kJ/mole) (gas)": g_log["Total Energy (kJ/mole)"].mean(
-                axis=0
-            ),
-            "Density (g/mL)": l_log["Density (g/mL)"].mean(axis=0),
-            "Speed (ns/day)": l_log["Speed (ns/day)"].mean(axis=0),
-            "Box Volume (nm^3)": l_log["Box Volume (nm^3)"].values,
+            "lE": l_log["Potential Energy (kJ/mole)"].values,
+            "gE": g_log["Potential Energy (kJ/mole)"].mean(axis=0),
+            "rho": l_log["Density (g/mL)"].mean(axis=0),
+            "speed": l_log["Speed (ns/day)"].mean(axis=0),
+            "v": l_log["Box Volume (nm^3)"].values,
             "nmols": nmol,
             "l_p": l_p,
             "g_p": g_p,
         }
         return input_data
 
-    def worker(self, input_array, **kwargs):
+    def worker(self, input_array, single=False, **kwargs):
         print("Running iteration:    ", self.iteration)
 
         # prepare new force field file with new parameters from the optimizer
-        if kwargs["single"]:
+        if single:
             with open(self.ff_file, "r") as f:
                 new_ff = f.read()
                 new_param = dict()
@@ -486,7 +484,10 @@ class Worker:
     def evaluate(self):
         iterations = glob(os.path.join(self.work_path, "iter_*"))
         niter = len(iterations)
-        for i in range(1, niter, 1):
+        if niter == 1:
+            self.prior = np.zeros(3)
+            self.penalty_priors = np.full_like(self.prior, 1)
+        for i in range(1, niter + 1, 1):
             print(f"re-evaluate iteration {i} of {niter} ...")
             iter_path = os.path.join(self.work_path, f"iter_{i:03d}")
             input_data = Worker._prepare_input(iter_path)
