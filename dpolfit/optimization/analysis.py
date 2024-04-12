@@ -73,10 +73,12 @@ def make_dataframe(data_path: str) -> pd.DataFrame:
             this_data |= {k: v["value"] for k, v in params.items()}
             try:
                 t = prp["temperature"]
-            except ValueError:
-                tmp = json.load(open(os.path.join(data_path, "iter_001", "run", "l", "input.json"), "r"))
+            except KeyError:
+                tmp = json.load(
+                    open(os.path.join(data_path, "iter_001", "l", "input.json"), "r")
+                )
                 t = tmp["temperature"]
-            this_data += {"temperature": t}
+            this_data |= {"temperature": float(t)}
             data.append(this_data)
         except FileNotFoundError:
             pass
@@ -110,7 +112,7 @@ def property_latex(iteration_path) -> str:
     styler.set_properties(**{"scriptsize": "--rwrap"})
 
     table = styler.to_latex(hrules=True)
-    table=table.replace("2.9", "2.5-3.1")
+    table = table.replace("2.9", "2.5-3.1")
 
     return table
 
