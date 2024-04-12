@@ -394,6 +394,8 @@ class Worker:
             with open(self.ff_file, "r") as f:
                 new_ff = f.read()
                 new_param = dict()
+                self.prior = input_array
+                self.penalty_priors = np.full_like(self.prior, 1)
         else:
             new_param = update_from_template(input_array, self.parameter_template)
             new_ff = update_ffxml(self.ff_file, new_param)
