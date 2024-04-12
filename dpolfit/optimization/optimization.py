@@ -134,10 +134,10 @@ def calc_properties(**kwargs):
             MultForce = force
             amoeba = True
         if isinstance(force, NonbondedForce):
-            qs = [
+            qs = np.array([
                 force.getParticleParameters(i)[0] / unit.elementary_charge
                 for i in range(system.getNumParticles())
-            ]
+            ])
 
     pdb_file = os.path.join(l_p, kwargs["output_pdb"])
     pdb = PDBFile(pdb_file)
@@ -386,8 +386,13 @@ class Worker:
         print("Running iteration:    ", self.iteration)
 
         # prepare new force field file with new parameters from the optimizer
-        new_param = update_from_template(input_array, self.parameter_template)
-        new_ff = update_ffxml(self.ff_file, new_param)
+        if kwargs["single"]:
+            with open(self.ff_file, "r") as f:
+                new_ff = f.read()
+                new_param = dict()
+        else:
+            new_param = update_from_template(input_array, self.parameter_template)
+            new_ff = update_ffxml(self.ff_file, new_param)
 
         # prepare simulation files and change to the directory
         iter_path = os.path.join(self.work_path, f"iter_{self.iteration:03d}")
