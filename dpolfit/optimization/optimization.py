@@ -10,6 +10,7 @@ import mdtraj as md
 import numpy as np
 import pandas as pd
 import pint
+import copy
 from lxml import etree
 from numpyencoder import NumpyEncoder
 from openmm import (
@@ -23,9 +24,15 @@ from openmm import (
 from openmm.app import PDBFile, Simulation
 from scipy.optimize import minimize
 from glob import glob
+from dpolfit.utilities.miscellaneous import create_monomer
+from dpolfit.openmm.md import run, InputData
 
 ureg = pint.UnitRegistry()
 Q_ = ureg.Quantity
+
+kb = Q_(1, ureg.boltzmann_constant).to("kJ/kelvin")
+na = Q_(1, "N_A")
+kb_u = (kb / (1 / na).to("mole")).to("kJ/kelvin/mole")
 
 parameter_names = {
     "./HarmonicBondForce/Bond[@class1='401'][@class2='402']": "length",
@@ -117,9 +124,6 @@ def calc_properties(**kwargs):
     t = Q_(float(kwargs["temperature"]), ureg.kelvin)
     l_p = kwargs["l_p"]
     g_p = kwargs["g_p"]
-    kb = Q_(1, ureg.boltzmann_constant).to("kJ/kelvin")
-    na = Q_(1, "N_A")
-    kb_u = (kb / (1 / na).to("mole")).to("kJ/kelvin/mole")
 
     with open(os.path.join(l_p, "system.xml"), "r") as f:
         system = XmlSerializer.deserialize(f.read())
@@ -141,7 +145,7 @@ def calc_properties(**kwargs):
                 ]
             )
 
-    pdb_file = os.path.join(l_p, kwargs["output_pdb"])
+    pdb_file = os.path.join(l_p, "output.pdb")
     pdb = PDBFile(pdb_file)
     integrator = LangevinIntegrator(
         t.magnitude * unit.kelvin, 1 / unit.picosecond, 2 * unit.femtoseconds
@@ -151,9 +155,7 @@ def calc_properties(**kwargs):
     simulation = Simulation(pdb.topology, system, integrator, myplatform, myproperties)
 
     traj = md.load(
-        os.path.join(
-            l_p, f"{kwargs['trajectory']}_{kwargs['simulation_time_ns']}ns.dcd"
-        ),
+        os.path.join(l_p, "trajectory.dcd"),
         top=pdb_file,
     )
     n_frames = traj.n_frames
@@ -329,13 +331,14 @@ def calc_properties(**kwargs):
         "condensed_mu": condensed_dipole,
         "speed (ns/day)": kwargs["speed"],
         "nmols": kwargs["nmols"],
+        "temperature": t.magnitude,
     }
 
     return ret
 
 
 class Worker:
-    def __init__(self, work_path: str, template_path: str):
+    def __init__(self, work_path: str, template_path: str, ngpus: int = 4):
         self.iteration = 1
         self.work_path = work_path
         self.template_path = template_path
@@ -349,21 +352,56 @@ class Worker:
         )
 
         self.references = pd.read_csv(
-            os.path.join(self.template_path, "references.csv")
+            os.path.join(self.template_path, "references.csv"), comment="#"
         )
-        self.properties = self.references["property"]
-        self.experiment = self.references["expt"]
-        _weights = self.references["weight"]
-        self.weights = _weights / _weights.sum(axis=0)
+
+        wts = [c for c in self.references.columns if "_wt" in c]
+        self.references[wts] = self.references[wts] / self.references[wts].values.sum()
+
+        self.references["weight"] = self.references[wts].sum(axis=1)
+        self.targets = self.references.loc[self.references["weight"] != 0]
+        self.temperatures = self.targets["temperature"]
 
         # the force field xml template
         self.ff_file = os.path.join(self.template_path, "forcefield.xml")
         self.cwd = os.getcwd()
 
-    @staticmethod
-    def _prepare_input(iter_path):
+        self.input_pdb = os.path.join(self.template_path, "input.pdb")
 
-        input_data = json.load(open(os.path.join(iter_path, "l", "input.json"), "r"))
+        if os.path.exists(os.path.join(self.template_path, "input.json")):
+            tmp0 = json.load(open(os.path.join(self.template_path, "input.json"), "r"))
+            tmp1 = {
+                k: tmp0[k] for k in list(InputData().__annotations__) if k in list(tmp0)
+            }
+            self.input_data = InputData(**tmp1)
+
+        else:
+            self.input_data = InputData()
+
+        if ngpus > 1:
+            self.ray = True
+            import ray
+
+            run_remote = ray.remote(num_gpus=1, num_cpus=2)(run)
+            calc_properties_remote = ray.remote(num_cpus=2, num_gpus=1)(calc_properties)
+            ray_tmp_path = "/tmp/ray_tmp"
+            os.makedirs(ray_tmp_path, exist_ok=True)
+            ray.init(_temp_dir=ray_tmp_path, num_gpus=ngpus, num_cpus=ngpus * 2)
+            self.calcs = {
+                True: {
+                    "run": run_remote.remote,
+                    "calc_properties": calc_properties_remote.remote,
+                },
+                False: {"run": run, "calc_properties": calc_properties},
+            }
+
+        else:
+            self.ray = False
+            self.calcs = {False: {"run": run, "calc_properties": calc_properties}}
+
+    @staticmethod
+    def _prepare_input(iter_path, temperature):
+
         l_p = os.path.join(iter_path, "l")
         g_p = os.path.join(iter_path, "g")
         l_log = pd.read_csv(os.path.join(l_p, "simulation.log"), skiprows=[1])
@@ -372,7 +410,8 @@ class Worker:
         l_pdb = PDBFile(os.path.join(l_p, "output.pdb"))
         nmol = l_pdb.topology.getNumResidues()
 
-        input_data |= {
+        ret = {
+            "temperature": temperature,
             "lE": l_log["Potential Energy (kJ/mole)"].values,
             "gE": g_log["Potential Energy (kJ/mole)"].mean(axis=0),
             "rho": l_log["Density (g/mL)"].mean(axis=0),
@@ -382,9 +421,12 @@ class Worker:
             "l_p": l_p,
             "g_p": g_p,
         }
-        return input_data
+        return ret
 
     def worker(self, input_array, single=False, **kwargs):
+        if self.ray:
+            import ray
+
         print("Running iteration:    ", self.iteration)
 
         # prepare new force field file with new parameters from the optimizer
@@ -400,12 +442,13 @@ class Worker:
 
         # prepare simulation files and change to the directory
         iter_path = os.path.join(self.work_path, f"iter_{self.iteration:03d}")
-        if os.path.exists(iter_path):
-            ret = json.load(open(os.path.join(iter_path, "properties.json"), "r"))
-            objt = ret["objective"]
+        if os.path.exists(os.path.join(iter_path, "properties.csv")):
+            dataframe = pd.read_csv(os.path.join(iter_path, "properties.csv"))
+            objt = self.objective(calc_data=dataframe, current_params=input_array)
             print(f"Restarting, previously estimated objective: {objt:.5f}")
         else:
-            shutil.copytree(os.path.join(self.template_path, "run"), iter_path)
+
+            os.makedirs(iter_path, exist_ok=True)
             os.chdir(iter_path)
 
             # dump current parameters and force field
@@ -413,36 +456,56 @@ class Worker:
             with open("forcefield.xml", "w") as f:
                 f.write(new_ff)
 
-            shutil.copy2("forcefield.xml", os.path.join(iter_path, "l"))
-            shutil.copy2("forcefield.xml", os.path.join(iter_path, "g"))
+            workers = []
+            for temp in self.temperatures:
+                temp_path = os.path.join(iter_path, str(np.floor(temp).astype(int)))
+                for f, e, m in zip(["l", "g"], ["npt", "nvt"], [False, True]):
+                    work_path = os.path.join(temp_path, f)
+                    input_data = copy.deepcopy(self.input_data)
+                    input_data.temperature = temp
+                    input_data.ensemble = e
+                    input_data.work_dir = work_path
+                    os.makedirs(work_path, exist_ok=True)
+                    shutil.copy2("forcefield.xml", work_path)
+                    if m:
+                        create_monomer(
+                            self.input_pdb, os.path.join(work_path, "input.pdb")
+                        )
+                    else:
+                        shutil.copy2(
+                            self.input_pdb, os.path.join(work_path, "input.pdb")
+                        )
 
-            # run simulations
-            os.system("sh runlocal.sh")
+                    workers.append(self.calcs[self.ray]["run"](input_data))
 
-            input_data = Worker._prepare_input(iter_path)
-            calced = calc_properties(**input_data)
+            if self.ray:
+                workers = ray.get(workers)
 
-            properties = {"properties": {p: calced[p] for p in self.properties}}
-            properties |= {"current_params": input_array}
+            if "Failed" in workers:
+                print("Failed to run simulation", new_param)
+                objt = 9999
 
-            objt = self.objective(**properties)
+            else:
+                workers = []
+                for temp in self.temperatures:
+                    temp_path = os.path.join(iter_path, str(np.floor(temp).astype(int)))
+                    input_data = self._prepare_input(temp_path, temp)
 
-            properties |= {
-                "objective": objt,
-                "weights": {
-                    p: self.weights[idx] for idx, p in enumerate(self.properties)
-                },
-                "expt": {
-                    p: self.experiment[idx] for idx, p in enumerate(self.properties)
-                },
-                "temperature": input_data["temperature"],
-            }
-            json.dump(
-                properties,
-                open(os.path.join(iter_path, "properties.json"), "w"),
-                indent=2,
-                cls=NumpyEncoder,
-            )
+                    workers.append(
+                        self.calcs[self.ray]["calc_properties"](**input_data)
+                    )
+
+                if self.ray:
+                    ret = ray.get(workers)
+
+                else:
+                    ret = workers
+
+                dataframe = pd.DataFrame(ret)
+
+                dataframe.to_csv(os.path.join(iter_path, "properties.csv"), index=False)
+
+                objt = self.objective(calc_data=dataframe, current_params=input_array)
 
         self.iteration += 1
 
@@ -450,21 +513,32 @@ class Worker:
 
         return objt
 
-    def objective(self, **kwargs):
-        current_params = kwargs["current_params"]
+    def objective(self, calc_data: pd.DataFrame, current_params, **kwargs):
         nparams = len(current_params)
+        properties = [
+            "epsilon",
+            "rho",
+            "hvap",
+            "alpha",
+            "kappa",
+            "weight",
+            "gas_mu",
+            "condensed_mu",
+        ]
 
         # absolute error percent
         abp = lambda x, y, z: (abs(x - y) / abs(y)) * z
 
         objt = np.array(
             [
-                abp(a, b, c)
-                for a, b, c in zip(
-                    [kwargs["properties"][p] for p in self.properties],
-                    self.experiment,
-                    self.weights,
+                abp(
+                    calc_data.loc[calc_data["temperature"] == t, p].values[0],
+                    self.targets.loc[self.targets["temperature"] == t, p].values[0],
+                    self.targets.loc[
+                        self.targets["temperature"] == t, f"{p}_wt"
+                    ].values[0],
                 )
+                for t, p in zip(self.targets["temperature"], properties)
             ]
         ).sum()
 

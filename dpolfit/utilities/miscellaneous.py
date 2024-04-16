@@ -5,6 +5,8 @@ from openeye.oechem import OEBlobType, OEField, OEMolRecord, OEStringType
 from openff.toolkit.topology import Molecule
 from openff.units import unit
 from qcelemental.models.molecule import Molecule as qcMolecule
+from openmm.app import PDBFile, Residue, Chain, Topology
+
 
 mapped_smile_field = OEField(
     "canonical_isomeric_explicit_hydrogen_mapped_smiles", OEStringType
@@ -76,3 +78,25 @@ def _qcmol2oemol(qcmol: qcMolecule) -> OEMolRecord:
     oemolrecord.set_mol(oemol)
 
     return oemolrecord
+
+
+def create_monomer(pdb_file: str, output_file: str):
+    pdb = PDBFile(pdb_file)
+    top = pdb.topology
+    pos = pdb.positions
+
+    residues = [r for r in top.residues()]
+    new_top = Topology()
+    new_chain = new_top.addChain()
+    new_res = new_top.addResidue(name=residues[0].name, chain=new_chain, id=0)
+
+    indices = []
+    for a in residues[0].atoms():
+        new_top.addAtom(name=a.name, element=a.element, residue=new_res, id=a.id)
+        indices.append(int(a.id))
+
+    new_pos = pos[indices[0] : indices[-1] + 1]
+
+    PDBFile.writeFile(new_top, new_pos, open(output_file, "w"))
+
+    return output_file
