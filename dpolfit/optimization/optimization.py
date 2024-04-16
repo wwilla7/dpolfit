@@ -524,7 +524,6 @@ class Worker:
             "hvap",
             "alpha",
             "kappa",
-            "weight",
             "gas_mu",
             "condensed_mu",
         ]
