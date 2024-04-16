@@ -507,6 +507,9 @@ class Worker:
 
                 objt = self.objective(calc_data=dataframe, current_params=input_array)
 
+        with open(os.path.join(self.work_path, "results.csv"), "a") as f:
+            f.write("{:03d},{}\n".format(self.iteration, objt))
+
         self.iteration += 1
 
         os.chdir(self.cwd)
