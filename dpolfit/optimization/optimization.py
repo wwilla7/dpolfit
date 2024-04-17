@@ -2,6 +2,7 @@
 
 import json
 import os
+import ray
 import shutil
 from collections import defaultdict
 from datetime import datetime
@@ -380,7 +381,6 @@ class Worker:
 
         if ngpus > 1:
             self.ray = True
-            import ray
 
             run_remote = ray.remote(num_gpus=1, num_cpus=2)(run)
             calc_properties_remote = ray.remote(num_cpus=2, num_gpus=1)(calc_properties)
@@ -424,8 +424,6 @@ class Worker:
         return ret
 
     def worker(self, input_array, single=False, **kwargs):
-        if self.ray:
-            import ray
 
         print("Running iteration:    ", self.iteration)
 
@@ -560,38 +558,28 @@ class Worker:
     def evaluate(self):
         iterations = glob(os.path.join(self.work_path, "iter_*"))
         niter = len(iterations)
+        workers = []
         if niter == 1:
             self.prior = np.zeros(3)
             self.penalty_priors = np.full_like(self.prior, 1)
         for i in range(1, niter + 1, 1):
             print(f"re-evaluate iteration {i} of {niter} ...")
             iter_path = os.path.join(self.work_path, f"iter_{i:03d}")
-            input_data = Worker._prepare_input(iter_path)
-            prp = calc_properties(**input_data)
-            properties = json.load(
-                open(os.path.join(iter_path, "properties.json"), "r")
-            )
+            for temp in self.temperatures:
+                temp_path = os.path.join(iter_path, str(np.floor(temp).astype(int)))
+                input_data = self._prepare_input(temp_path, temp)
+                workers.append(self.calcs[self.ray]["calc_properties"](**input_data))
 
-            properties["properties"].update({p: prp[p] for p in self.properties})
-            objt = self.objective(**properties)
-            properties.update(
-                {
-                    "objective": objt,
-                    "weights": {
-                        p: self.weights[idx] for idx, p in enumerate(self.properties)
-                    },
-                    "expt": {
-                        p: self.experiment[idx] for idx, p in enumerate(self.properties)
-                    },
-                }
-            )
+            if self.ray:
+                ret = ray.get(workers)
 
-            json.dump(
-                properties,
-                open(os.path.join(iter_path, "properties.json"), "w"),
-                indent=2,
-                cls=NumpyEncoder,
-            )
+            else:
+                ret = workers
+
+            dataframe = pd.DataFrame(ret)
+
+            dataframe.to_csv(os.path.join(iter_path, "properties.csv"), index=False)
+
 
     def optimize(self, opt_method="Nelder-Mead", bounds=None):
         res = minimize(self.worker, self.prior, method=opt_method, bounds=bounds)

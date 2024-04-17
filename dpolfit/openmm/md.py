@@ -102,8 +102,12 @@ def run(input_data: InputData):
     simulation.minimizeEnergy()
 
     equ_nsteps = round(1 * unit.nanosecond / (timestep * unit.femtosecond))
-    simulation.step(equ_nsteps)
-    simulation.reporters.clear()
+    try:
+        simulation.step(equ_nsteps)
+        simulation.reporters.clear()
+    except (ValueError, openmm.OpenMMException) as error:
+        print(error)
+        return "Failed"
 
     simulation_time = input_data.simulation_time_ns
     nsteps = round(
