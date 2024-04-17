@@ -339,7 +339,7 @@ def calc_properties(**kwargs):
 
 
 class Worker:
-    def __init__(self, work_path: str, template_path: str, ngpus: int = 4):
+    def __init__(self, work_path: str, template_path: str, ray: bool = True):
         self.iteration = 1
         self.work_path = work_path
         self.template_path = template_path
@@ -379,14 +379,13 @@ class Worker:
         else:
             self.input_data = InputData()
 
-        if ngpus > 1:
-            self.ray = True
+        if self.ray:
 
             run_remote = ray.remote(num_gpus=1, num_cpus=2)(run)
             calc_properties_remote = ray.remote(num_cpus=2, num_gpus=1)(calc_properties)
-            ray_tmp_path = "/tmp/ray_tmp"
-            os.makedirs(ray_tmp_path, exist_ok=True)
-            ray.init(_temp_dir=ray_tmp_path, num_gpus=ngpus, num_cpus=ngpus * 2)
+            # ray_tmp_path = "/tmp/ray_tmp"
+            # os.makedirs(ray_tmp_path, exist_ok=True)
+            # ray.init(_temp_dir=ray_tmp_path, num_gpus=ngpus, num_cpus=ngpus * 2)
             self.calcs = {
                 True: {
                     "run": run_remote.remote,
@@ -396,7 +395,6 @@ class Worker:
             }
 
         else:
-            self.ray = False
             self.calcs = {False: {"run": run, "calc_properties": calc_properties}}
 
     @staticmethod
@@ -579,7 +577,6 @@ class Worker:
             dataframe = pd.DataFrame(ret)
 
             dataframe.to_csv(os.path.join(iter_path, "properties.csv"), index=False)
-
 
     def optimize(self, opt_method="Nelder-Mead", bounds=None):
         res = minimize(self.worker, self.prior, method=opt_method, bounds=bounds)
