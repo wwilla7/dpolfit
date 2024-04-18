@@ -339,7 +339,7 @@ def calc_properties(**kwargs):
 
 
 class Worker:
-    def __init__(self, work_path: str, template_path: str, ray_address: str = "auto"):
+    def __init__(self, work_path: str, template_path: str, ngpus: int = 4):
         self.iteration = 1
         self.work_path = work_path
         self.template_path = template_path
@@ -379,13 +379,10 @@ class Worker:
         else:
             self.input_data = InputData()
 
-        if ray_address == None:
-            self.ray = False
-        else:
+        if ngpus > 1:
             self.ray = True
 
-        if self.ray:
-            ray.init(address=ray_address)
+            ray.init(_temp_dir="/tmp/ray_tmp", num_gpus=ngpus, num_cpus=2*ngpus)
 
             run_remote = ray.remote(num_gpus=1, num_cpus=2)(run)
             calc_properties_remote = ray.remote(num_cpus=2, num_gpus=1)(calc_properties)
@@ -398,6 +395,7 @@ class Worker:
             }
 
         else:
+            self.ray = False
             self.calcs = {False: {"run": run, "calc_properties": calc_properties}}
 
     @staticmethod
