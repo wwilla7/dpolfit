@@ -568,11 +568,11 @@ class Worker:
     def evaluate(self):
         iterations = glob(os.path.join(self.work_path, "iter_*"))
         niter = len(iterations)
-        workers = []
         if niter == 1:
             self.prior = np.zeros(3)
             self.penalty_priors = np.full_like(self.prior, 1)
         for i in range(1, niter + 1, 1):
+            workers = []
             print(f"re-evaluate iteration {i} of {niter} ...")
             iter_path = os.path.join(self.work_path, f"iter_{i:03d}")
             for temp in self.temperatures:
