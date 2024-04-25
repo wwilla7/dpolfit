@@ -114,7 +114,7 @@ def run(input_data: InputData):
         float(simulation_time) * unit.nanosecond / (timestep * unit.femtosecond)
     )
     # save trajectory every 100ps
-    save_nsteps = round(100 * unit.picosecond / (timestep * unit.femtosecond))
+    save_nsteps = round(10 * unit.picosecond / (timestep * unit.femtosecond))
     simulation.reporters.append(
         StateDataReporter(
             "simulation.log",
