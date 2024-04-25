@@ -48,6 +48,29 @@ parameter_names = {
 }
 
 
+def _get_input(ff_file: str, parameters: dict) -> dict:
+    """
+    [TODO:description]
+
+    :param ff_file: [TODO:description]
+    :type ff_file: str
+    :param parameters: [TODO:description]
+    :type parameters: dict
+    :return: [TODO:description]
+    :rtype: dict
+    """
+
+    tree = etree.parse(ff_file)
+    root = tree.getroot()
+
+    for k, v in parameters.items():
+        ret = root.findall(k)
+        for r in ret:
+            dt = r.get(parameter_names[k])
+            v.update({k: float(dt) for k in ["initial", "value"]})
+    return parameters
+
+
 def update_ffxml(ff_file: str, parameters: dict) -> str:
     tree = etree.parse(ff_file)
     root = tree.getroot()
@@ -330,7 +353,7 @@ def calc_properties(**kwargs):
         total_induced=np.array(induced),
     )
 
-    molpol = np.sum(gas_alphas)*1000 #A^3
+    molpol = np.sum(gas_alphas) * 1000  # A^3
 
     ret |= {
         "hvap": hvap.magnitude,
@@ -357,10 +380,12 @@ class Worker:
         self.parameter_template = json.load(
             open(os.path.join(self.template_path, "parameters.json"), "r")
         )
-        self.penalty_priors = [v["prior"] for _, v in self.parameter_template.items()]
+        self.penalty_priors = np.array(
+            [v["prior"] for _, v in self.parameter_template.items()]
+        ).astype(float)
         self.prior = np.array(
             [v["initial"] for _, v in self.parameter_template.items()]
-        )
+        ).astype(float)
 
         self.references = pd.read_csv(
             os.path.join(self.template_path, "references.csv"), comment="#"
@@ -591,7 +616,13 @@ class Worker:
             dataframe.to_csv(os.path.join(iter_path, "properties.csv"), index=False)
 
     def optimize(self, opt_method="Nelder-Mead", bounds=None):
-        res = minimize(self.worker, self.prior, method=opt_method, bounds=bounds, options={"maxiter": 50})
+        res = minimize(
+            self.worker,
+            self.prior,
+            method=opt_method,
+            bounds=bounds,
+            options={"maxiter": 50},
+        )
 
         return res
 
