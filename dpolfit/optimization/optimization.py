@@ -27,10 +27,10 @@ from scipy.optimize import minimize
 from glob import glob
 from dpolfit.utilities.miscellaneous import create_monomer
 from dpolfit.openmm.md import run, InputData
-from dpolfit.utilities.constants import kb, na, kb_u
+from dpolfit.utilities.constants import kb, na, kb_u, ureg, Q_
 
-ureg = pint.UnitRegistry()
-Q_ = ureg.Quantity
+# ureg = pint.UnitRegistry()
+# Q_ = ureg.Quantity
 
 
 parameter_names = {
