@@ -27,13 +27,11 @@ from scipy.optimize import minimize
 from glob import glob
 from dpolfit.utilities.miscellaneous import create_monomer
 from dpolfit.openmm.md import run, InputData
+from dpolfit.utilities.constants import kb, na, kb_u
 
 ureg = pint.UnitRegistry()
 Q_ = ureg.Quantity
 
-kb = Q_(1, ureg.boltzmann_constant).to("kJ/kelvin")
-na = Q_(1, "N_A")
-kb_u = (kb / (1 / na).to("mole")).to("kJ/kelvin/mole")
 
 parameter_names = {
     "./HarmonicBondForce/Bond[@class1='401'][@class2='402']": "length",
@@ -278,6 +276,14 @@ def calc_properties(**kwargs):
                     for ni in range(gas_natoms)
                 ]
             )
+            gas_alphas = np.array(
+                [
+                    GasMultForce.getMultipoleParameters(ni)[-1].value_in_unit(
+                        unit.nanometer**3
+                    )
+                    for ni in range(gas_natoms)
+                ]
+            )
         if isinstance(force, NonbondedForce) and not amoeba:
             gas_qs = np.array(
                 [
@@ -285,6 +291,7 @@ def calc_properties(**kwargs):
                     for i in range(gas_natoms)
                 ]
             )
+            gas_alphas = np.zeros(gas_natoms)
 
     if gas_natoms < 4 or not amoeba:
         induced = np.zeros((gas_natoms, 3), dtype=float)
@@ -323,6 +330,8 @@ def calc_properties(**kwargs):
         total_induced=np.array(induced),
     )
 
+    molpol = np.sum(gas_alphas)*1000 #A^3
+
     ret |= {
         "hvap": hvap.magnitude,
         "alpha": alpha.magnitude,
@@ -330,6 +339,7 @@ def calc_properties(**kwargs):
         "rho": kwargs["rho"],
         "gas_mu": gas_dipole,
         "condensed_mu": condensed_dipole,
+        "molpol": molpol,
         "speed (ns/day)": kwargs["speed"],
         "nmols": kwargs["nmols"],
         "temperature": t.magnitude,
@@ -382,7 +392,7 @@ class Worker:
         if ngpus > 1:
             self.ray = True
 
-            ray.init(_temp_dir="/tmp/ray_tmp", num_gpus=ngpus, num_cpus=2*ngpus)
+            ray.init(_temp_dir="/tmp/ray_tmp", num_gpus=ngpus, num_cpus=2 * ngpus)
 
             run_remote = ray.remote(num_gpus=1, num_cpus=2)(run)
             calc_properties_remote = ray.remote(num_cpus=2, num_gpus=1)(calc_properties)
@@ -523,6 +533,7 @@ class Worker:
             "kappa",
             "gas_mu",
             "condensed_mu",
+            "molpol",
         ]
 
         # absolute error percent
@@ -580,7 +591,7 @@ class Worker:
             dataframe.to_csv(os.path.join(iter_path, "properties.csv"), index=False)
 
     def optimize(self, opt_method="Nelder-Mead", bounds=None):
-        res = minimize(self.worker, self.prior, method=opt_method, bounds=bounds)
+        res = minimize(self.worker, self.prior, method=opt_method, bounds=bounds, options={"maxiter": 50})
 
         return res
 
