@@ -336,7 +336,7 @@ def calc_properties(**kwargs):
         positions=np.array(gas_positions.value_in_unit(unit.nanometer)),
         residues=gas_residues,
         charges=gas_qs,
-        total_induced=induced,
+        total_induced=np.array(induced),
     )
 
     # condensed phase

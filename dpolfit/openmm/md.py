@@ -2,7 +2,14 @@ import os
 import shutil
 
 import openmm
-from openmm import LangevinIntegrator, MonteCarloBarostat, Platform, XmlSerializer, unit
+from openmm import (
+    LangevinIntegrator,
+    MonteCarloBarostat,
+    Platform,
+    XmlSerializer,
+    unit,
+    AmoebaMultipoleForce,
+)
 from openmm.app import (
     PME,
     DCDReporter,
@@ -75,13 +82,40 @@ def run(input_data: InputData):
 
     try:
         system = forcefield.createSystem(**system_arguments)
+        use_amoeba = True
     except ValueError as e:
         if "polarization" in e.args[0]:
             system_arguments.pop("polarization")
             system = forcefield.createSystem(**system_arguments)
+            use_amoeba = False
+
+        else:
+            print("Failed at create system:\n", e)
+            exit()
 
     if npt:
         system.addForce(MonteCarloBarostat(1 * unit.atmosphere, temperature, 25))
+
+    # we want to check if tye system has the same nonbonded exception
+    # if not, we want to correct it
+    if use_amoeba:
+        forces = {force.__class__.__name__: force for force in system.getForces()}
+        if "NonbondedForce" in list(forces.keys()):
+            for ni in range(system.getNumParticles()):
+                covalentAtoms = forces["AmoebaMultipoleForce"].getCovalentMap(
+                    ni, AmoebaMultipoleForce.Covalent15
+                )
+                if len(covalentAtoms) > 0:
+                    q, s, e = forces["NonbondedForce"].getParticleParameters(ni)
+                    for atom in covalentAtoms:
+                        if atom < ni:
+                            forces["NonbondedForce"].addException(
+                                particle1=ni,
+                                particle2=atom,
+                                chargeProd=q * unit.elementary_charge,
+                                sigma=s,
+                                epsilon=e,
+                            )
 
     with open("system.xml", "w") as file:
         file.write(XmlSerializer.serialize(system))
