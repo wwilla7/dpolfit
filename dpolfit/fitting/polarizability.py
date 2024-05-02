@@ -172,10 +172,10 @@ def train(oedatabase: oechem.OEMolRecord, parameter_types: list) -> dict:
     # ret, _ = nnls(A, B)
     ret = np.linalg.solve(A, B)
 
-    dt_json = {"parameters": {p: v for p, v in zip(parameter_types, ret)}} | {
-        # dt_json = {"parameters": {p: v*a03_to_nm3 for p, v in zip(parameter_types, ret)}} | {
-        "_unit": "bohr**3",
-        # "_unit": "nm**3",
+    #dt_json = {"parameters": {p: v for p, v in zip(parameter_types, ret)}} | {
+    dt_json = {"parameters": {p: v*a03_to_nm3 for p, v in zip(parameter_types, ret)}} | {
+        #"_unit": "bohr**3",
+         "_unit": "nm**3",
         "_generated": datetime.now().strftime("%m-%d-%Y %H:%M:%S"),
         "_dataset": dataset,
         "design_matrix_count": param_count,

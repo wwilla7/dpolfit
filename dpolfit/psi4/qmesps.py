@@ -51,7 +51,7 @@ def psi4_optimizer(wd: str) -> float:
     return ene
 
 
-def generate_grid(wd: str) -> 0:
+def generate_grid(wd: str, density: float = 17.0, layers: float = 10.0) -> 0:
     """
     [TODO:description]
 
@@ -63,7 +63,7 @@ def generate_grid(wd: str) -> 0:
 
     os.chdir(wd)
 
-    grid_settings = MSKGridSettings(type="msk", density=17.0, layers=10.0)
+    grid_settings = MSKGridSettings(type="msk", density=density, layers=layers)
 
     # if os.path.exists("optimized.xyz"):
     #    pass
@@ -89,7 +89,14 @@ def generate_grid(wd: str) -> 0:
 
 
 @ray.remote(num_cpus=8)
-def psi4_esps(imposed: str, wd: str) -> 0:
+def psi4_esps(
+    imposed: str,
+    wd: str,
+    method: str = "mp2",
+    basis: str = "aug-cc-pvtz",
+    density: float = 17.0,
+    layers: float = 10.0,
+) -> 0:
     """
     Compute QM ESPs with Psi4
 
@@ -104,9 +111,9 @@ def psi4_esps(imposed: str, wd: str) -> 0:
     os.chdir(wd)
 
     qc_data_settings = ESPSettings(
-        method="mp2",
-        basis="aug-cc-pvtz",
-        grid_settings=MSKGridSettings(type="msk", density=17.0, layers=10.0),
+        method=method,
+        basis=basis,
+        grid_settings=MSKGridSettings(type="msk", density=density, layers=layers),
         perturb_dipole=perturb_dipoles[imposed],
     )
 
@@ -139,7 +146,7 @@ def psi4_esps(imposed: str, wd: str) -> 0:
     return 0
 
 
-def worker(input_file: str, wd: str) -> str:
+def worker(input_file: str, wd: str, maxconf:int=10, imposed_fields:dict=perturb_dipoles) -> str:
     """
     The main function to carry out geometry optimization
     and QM ESPs generation.
@@ -158,7 +165,7 @@ def worker(input_file: str, wd: str) -> str:
     cwd = os.getcwd()
     ifs = oechem.oemolistream(input_file)
     omegaOpts = oeomega.OEOmegaOptions()
-    omegaOpts.SetMaxConfs(10)
+    omegaOpts.SetMaxConfs(maxconf)
     omega = oeomega.OEOmega(omegaOpts)
     workers = []
     for mol_idx, mol in enumerate(ifs.GetOEMols()):
@@ -182,7 +189,7 @@ def worker(input_file: str, wd: str) -> str:
                 ret = psi4_optimizer.remote(c_p)
                 print(ray.get(ret))
                 generate_grid(c_p)
-                for k, v in perturb_dipoles.items():
+                for k, v in imposed_fields.items():
                     ret = psi4_esps.remote(k, c_p)
                     workers.append(ret)
                 os.chdir(cwd)
@@ -230,7 +237,7 @@ def worker(input_file: str, wd: str) -> str:
                 conf_record.set_value(
                     grid_angstrom_field, json.dumps(grids, cls=NumpyEncoder)
                 )
-                for d, e in perturb_dipoles.items():
+                for d, e in imposed_fields.items():
                     grid_espi = np.load(os.path.join(conf, f"grid_esp.{d}.npy"))
                     conf_record.set_value(
                         OEField(f"grid_esp_{d}_au_field", OEStringType),

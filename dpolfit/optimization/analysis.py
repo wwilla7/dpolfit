@@ -61,24 +61,26 @@ def make_dataframe(data_path: str) -> pd.DataFrame:
     for i in range(n_iter):
         iteration = f"iter_{i+1:03d}"
         try:
-            prp = json.load(
-                open(os.path.join(data_path, iteration, "properties.json"), "r")
-            )
+            #prp = json.load(
+            #    open(os.path.join(data_path, iteration, "properties.json"), "r")
+            #)
+            prp = pd.read_json(os.path.join(data_path, iteration, "properties.csv"))
             params = json.load(
                 open(os.path.join(data_path, iteration, "parameters.json"), "r")
             )
-            objt = prp["objective"]
-            this_data = {"iteration": i + 1, "objective": objt}
-            this_data |= prp["properties"]
-            this_data |= {k: v["value"] for k, v in params.items()}
-            try:
-                t = prp["temperature"]
-            except KeyError:
-                tmp = json.load(
-                    open(os.path.join(data_path, "iter_001", "l", "input.json"), "r")
-                )
-                t = tmp["temperature"]
-            this_data |= {"temperature": float(t)}
+            #objt = prp["objective"]
+            #this_data = {"iteration": i + 1, "objective": objt}
+            prp["iteration"] = iteration + 1
+            this_data = {k: v["value"] for k, v in params.items()}
+            this_data |= prp.to_dict(orient="records")[0]
+            #try:
+            #    t = prp["temperature"]
+            #except KeyError:
+            #    tmp = json.load(
+            #        open(os.path.join(data_path, "iter_001", "l", "input.json"), "r")
+            #    )
+            #    t = tmp["temperature"]
+            #this_data |= {"temperature": float(t)}
             data.append(this_data)
         except FileNotFoundError:
             pass

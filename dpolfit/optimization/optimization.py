@@ -48,7 +48,7 @@ parameter_names = {
 }
 
 
-def _get_input(ff_file: str, parameters: dict) -> dict:
+def _get_input(ff_file: str, parm_json: str) -> dict:
     """
     [TODO:description]
 
@@ -60,6 +60,8 @@ def _get_input(ff_file: str, parameters: dict) -> dict:
     :rtype: dict
     """
 
+    parameters = json.load(open(parm_json, "r"))
+
     tree = etree.parse(ff_file)
     root = tree.getroot()
 
@@ -68,6 +70,8 @@ def _get_input(ff_file: str, parameters: dict) -> dict:
         for r in ret:
             dt = r.get(parameter_names[k])
             v.update({k: float(dt) for k in ["initial", "value"]})
+
+    json.dump(parameters, open("parameters.json", "w"), indent=2)
     return parameters
 
 
@@ -587,6 +591,15 @@ class Worker:
         ret_penalties = np.sum([p(i, objt) for i in range(nparams)])
 
         objt += ret_penalties
+
+        # if np.where(calc_data["rho"] == calc_data["rho"].max())[0][0] < 1:
+        #     objt += 100 * objt
+        #
+        # rho_diff = calc_data["rho"].max() - calc_data["rho"].min()
+        # if rho_diff > 0.05:
+        #     objt += 100 * objt
+        # else:
+        #     objt -= 100 * objt
 
         return objt
 
