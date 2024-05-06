@@ -100,14 +100,33 @@ def run(input_data: InputData):
     # if not, we want to correct it
     if use_amoeba:
         forces = {force.__class__.__name__: force for force in system.getForces()}
-        if "NonbondedForce" in list(forces.keys()):
+        if "NonbondedForce" in list(forces.keys()) and "Force" not in list(forces.keys()):
             for ni in range(system.getNumParticles()):
-                covalentAtoms = forces["AmoebaMultipoleForce"].getCovalentMap(
+                # for ptype in [
+                #     AmoebaMultipoleForce.PolarizationCovalent11,
+                #     AmoebaMultipoleForce.PolarizationCovalent12,
+                #     AmoebaMultipoleForce.PolarizationCovalent13,
+                #     AmoebaMultipoleForce.PolarizationCovalent14,
+                # ]:
+                #     forces["AmoebaMultipoleForce"].setCovalentMap(ni, ptype, [])
+
+                covalent12 = forces["AmoebaMultipoleForce"].getCovalentMap(ni, AmoebaMultipoleForce.Covalent12)
+                covalent13 = forces["AmoebaMultipoleForce"].getCovalentMap(ni, AmoebaMultipoleForce.Covalent13)
+                covalent14 = forces["AmoebaMultipoleForce"].getCovalentMap(ni, AmoebaMultipoleForce.Covalent14)
+                covalent15 = forces["AmoebaMultipoleForce"].getCovalentMap(
                     ni, AmoebaMultipoleForce.Covalent15
                 )
-                if len(covalentAtoms) > 0:
+                # if len(covalent12) > 0:
+                #     tmp = tuple([a for a in covalent12] + [ni])
+                #     forces["AmoebaMultipoleForce"].setCovalentMap(ni, AmoebaMultipoleForce.PolarizationCovalent11, tmp)
+                # if len(covalent13) > 0:
+                #     forces["AmoebaMultipoleForce"].setCovalentMap(ni, AmoebaMultipoleForce.PolarizationCovalent12,covalent13)
+                # if len(covalent14) > 0:
+                #     forces["AmoebaMultipoleForce"].setCovalentMap(ni, AmoebaMultipoleForce.PolarizationCovalent13, covalent14)
+                if len(covalent15) > 0:
+                    # forces["AmoebaMultipoleForce"].setCovalentMap(ni, AmoebaMultipoleForce.PolarizationCovalent14, covalent15)
                     q, s, e = forces["NonbondedForce"].getParticleParameters(ni)
-                    for atom in covalentAtoms:
+                    for atom in covalent15:
                         if atom < ni:
                             forces["NonbondedForce"].addException(
                                 particle1=ni,
@@ -116,6 +135,9 @@ def run(input_data: InputData):
                                 sigma=s,
                                 epsilon=e,
                             )
+
+
+
 
     with open("system.xml", "w") as file:
         file.write(XmlSerializer.serialize(system))
@@ -135,13 +157,13 @@ def run(input_data: InputData):
     simulation.context.setPositions(positions)
     simulation.minimizeEnergy()
 
-    equ_nsteps = round(1 * unit.nanosecond / (timestep * unit.femtosecond))
-    try:
-        simulation.step(equ_nsteps)
-        simulation.reporters.clear()
-    except (ValueError, openmm.OpenMMException) as error:
-        print(error)
-        return "Failed"
+    # equ_nsteps = round(1 * unit.nanosecond / (timestep * unit.femtosecond))
+    # try:
+    #     simulation.step(equ_nsteps)
+    #     simulation.reporters.clear()
+    # except (ValueError, openmm.OpenMMException) as error:
+    #     print(error)
+    #     return "Failed"
 
     simulation_time = input_data.simulation_time_ns
     nsteps = round(

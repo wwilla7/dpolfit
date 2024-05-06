@@ -21,6 +21,7 @@ from openmm import (
     Platform,
     XmlSerializer,
     unit,
+    Vec3
 )
 from openmm.app import PDBFile, Simulation
 from scipy.optimize import minimize
@@ -150,26 +151,42 @@ def calc_properties(**kwargs):
     t = Q_(float(kwargs["temperature"]), ureg.kelvin)
     l_p = kwargs["l_p"]
     g_p = kwargs["g_p"]
+    if "MPID" in list(kwargs.keys()):
+        mpid = True
+    else:
+        mpid = False
 
     with open(os.path.join(l_p, "system.xml"), "r") as f:
         system = XmlSerializer.deserialize(f.read())
 
     amoeba = False
     forces = {}
-    for idx, force in enumerate(system.getForces()):
-        force_name = force.__class__.__name__
-        force.setForceGroup(idx)
-        forces[force_name] = idx
-        if isinstance(force, AmoebaMultipoleForce):
-            MultForce = force
-            amoeba = True
-        if isinstance(force, NonbondedForce):
-            qs = np.array(
-                [
-                    force.getParticleParameters(i)[0] / unit.elementary_charge
-                    for i in range(system.getNumParticles())
-                ]
-            )
+    if mpid:
+        import mpidplugin
+        for idx, force in enumerate(system.getForces()):
+            force_name = force.__class__.__name__
+            force.setForceGroup(idx)
+            forces[force_name] = idx
+            if mpidplugin.MPIDForce.isinstance(force):
+                MultForce = mpidplugin.MPIDForce.cast(force)
+                amoeba = True
+
+    else:
+        for idx, force in enumerate(system.getForces()):
+            force_name = force.__class__.__name__
+            force.setForceGroup(idx)
+            forces[force_name] = idx
+            if isinstance(force, AmoebaMultipoleForce):
+                MultForce = force
+                amoeba = True
+            if isinstance(force, NonbondedForce):
+                qs = np.array(
+                    [
+                        force.getParticleParameters(i)[0] / unit.elementary_charge
+                        for i in range(system.getNumParticles())
+                    ]
+                )
+
 
     pdb_file = os.path.join(l_p, "output.pdb")
     pdb = PDBFile(pdb_file)
@@ -221,6 +238,8 @@ def calc_properties(**kwargs):
             )
             energies[force_name].append(energy)
 
+    json.dump(energies, open(os.path.join(l_p, "energies.json"), "w"))
+
     mus = np.array(mus)
     ### fluctuation of dipoles
     avg_sqr_mus_au = np.mean(np.square(mus), axis=0)
@@ -242,13 +261,20 @@ def calc_properties(**kwargs):
     eps = prefactor * variance * (1 / average_volumes)
 
     if amoeba:
-        del qs
+        try:
+            del qs
+        except UnboundLocalError:
+            print("Possibly using AmoebaVdwForce")
         parameters = [
             MultForce.getMultipoleParameters(ni)
             for ni in range(system.getNumParticles())
         ]
-        alphas = np.array([p[-1].value_in_unit(unit.nanometer**3) for p in parameters])
-        qs = np.array([p[0].value_in_unit(unit.elementary_charge) for p in parameters])
+        if mpid:
+            alphas = np.array([np.mean(p[-1]) for p in parameters])
+            qs = np.array([p[0] for p in parameters])
+        else:
+            alphas = np.array([p[-1].value_in_unit(unit.nanometer**3) for p in parameters])
+            qs = np.array([p[0].value_in_unit(unit.elementary_charge) for p in parameters])
         sum_alphas = Q_(np.sum(alphas), "nm**3").to("a0**3").magnitude
         eps_infty = prefactor00 * (1 / average_volumes) * sum_alphas + 1
 
@@ -293,34 +319,51 @@ def calc_properties(**kwargs):
     with open(os.path.join(g_p, "system.xml"), "r") as f:
         gas_system = XmlSerializer.deserialize(f.read())
     for idx, force in enumerate(gas_system.getForces()):
-        if isinstance(force, AmoebaMultipoleForce):
-            GasMultForce = force
-            gas_qs = np.array(
-                [
-                    GasMultForce.getMultipoleParameters(ni)[0].value_in_unit(
-                        unit.elementary_charge
-                    )
-                    for ni in range(gas_natoms)
-                ]
-            )
-            gas_alphas = np.array(
-                [
-                    GasMultForce.getMultipoleParameters(ni)[-1].value_in_unit(
-                        unit.nanometer**3
-                    )
-                    for ni in range(gas_natoms)
-                ]
-            )
-        if isinstance(force, NonbondedForce) and not amoeba:
-            gas_qs = np.array(
-                [
-                    force.getParticleParameters(i)[0] / unit.elementary_charge
-                    for i in range(gas_natoms)
-                ]
-            )
-            gas_alphas = np.zeros(gas_natoms)
+        if mpid:
+            if mpidplugin.MPIDForce.isinstance(force):
+                GasMultForce = mpidplugin.MPIDForce.cast(force)
+                gas_qs = np.array(
+                    [
+                        GasMultForce.getMultipoleParameters(ni)[0]
+                        for ni in range(gas_natoms)
+                    ]
+                )
+                gas_alphas = np.array(
+                    [
+                        np.mean(GasMultForce.getMultipoleParameters(ni)[-1])
+                        for ni in range(gas_natoms)
+                    ]
+                )
 
-    if gas_natoms < 4 or not amoeba:
+        else:
+            if isinstance(force, AmoebaMultipoleForce):
+                GasMultForce = force
+                gas_qs = np.array(
+                    [
+                        GasMultForce.getMultipoleParameters(ni)[0].value_in_unit(
+                            unit.elementary_charge
+                        )
+                        for ni in range(gas_natoms)
+                    ]
+                )
+                gas_alphas = np.array(
+                    [
+                        GasMultForce.getMultipoleParameters(ni)[-1].value_in_unit(
+                            unit.nanometer**3
+                        )
+                        for ni in range(gas_natoms)
+                    ]
+                )
+            if isinstance(force, NonbondedForce) and not amoeba:
+                gas_qs = np.array(
+                    [
+                        force.getParticleParameters(i)[0] / unit.elementary_charge
+                        for i in range(gas_natoms)
+                    ]
+                )
+                gas_alphas = np.zeros(gas_natoms)
+
+    if gas_natoms < 4 or mpid or not amoeba:
         induced = np.zeros((gas_natoms, 3), dtype=float)
     else:
         gas_integrator = LangevinIntegrator(
@@ -331,6 +374,7 @@ def calc_properties(**kwargs):
         )
         gas_simulation.context.setPositions(gas_positions)
         induced = GasMultForce.getInducedDipoles(gas_simulation.context)
+
 
     gas_dipole = dipole_moments(
         positions=np.array(gas_positions.value_in_unit(unit.nanometer)),
@@ -344,8 +388,7 @@ def calc_properties(**kwargs):
     condensed_positions = traj.openmm_positions(frame=n_frames - 1)
     condensed_residues = pdb.topology.residues()
     simulation.context.setPositions(condensed_positions)
-
-    if amoeba:
+    if amoeba and not mpid:
         induced = MultForce.getInducedDipoles(simulation.context)
     else:
         induced = np.zeros((system.getNumParticles(), 3), dtype=float)
