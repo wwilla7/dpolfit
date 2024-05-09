@@ -23,7 +23,7 @@ from openmm.app import (
 )
 
 # from dataclasses import dataclass
-from pydantic.dataclasses import dataclass
+from pydantic.dataclasses import dataclass, Field
 
 
 @dataclass(config=dict(validate_assignment=True))
@@ -50,8 +50,8 @@ def run(input_data: InputData):
         os.makedirs(work_dir, exist_ok=True)
         os.chdir(work_dir)
 
-    ff_file = input_data.forcefield
-    forcefield = ForceField(ff_file)
+    ff_file = input_data.forcefield.split(' ')
+    forcefield = ForceField(*ff_file)
     timestep = input_data.timestep
     temperature = input_data.temperature * unit.kelvin
     deviceid = str(input_data.cuda_device)
@@ -102,13 +102,13 @@ def run(input_data: InputData):
         forces = {force.__class__.__name__: force for force in system.getForces()}
         if "NonbondedForce" in list(forces.keys()) and "Force" not in list(forces.keys()):
             for ni in range(system.getNumParticles()):
-                # for ptype in [
-                #     AmoebaMultipoleForce.PolarizationCovalent11,
-                #     AmoebaMultipoleForce.PolarizationCovalent12,
-                #     AmoebaMultipoleForce.PolarizationCovalent13,
-                #     AmoebaMultipoleForce.PolarizationCovalent14,
-                # ]:
-                #     forces["AmoebaMultipoleForce"].setCovalentMap(ni, ptype, [])
+                for ptype in [
+                    AmoebaMultipoleForce.PolarizationCovalent11,
+                    AmoebaMultipoleForce.PolarizationCovalent12,
+                    AmoebaMultipoleForce.PolarizationCovalent13,
+                    AmoebaMultipoleForce.PolarizationCovalent14,
+                ]:
+                    forces["AmoebaMultipoleForce"].setCovalentMap(ni, ptype, [])
 
                 covalent12 = forces["AmoebaMultipoleForce"].getCovalentMap(ni, AmoebaMultipoleForce.Covalent12)
                 covalent13 = forces["AmoebaMultipoleForce"].getCovalentMap(ni, AmoebaMultipoleForce.Covalent13)
@@ -116,15 +116,9 @@ def run(input_data: InputData):
                 covalent15 = forces["AmoebaMultipoleForce"].getCovalentMap(
                     ni, AmoebaMultipoleForce.Covalent15
                 )
-                # if len(covalent12) > 0:
-                #     tmp = tuple([a for a in covalent12] + [ni])
-                #     forces["AmoebaMultipoleForce"].setCovalentMap(ni, AmoebaMultipoleForce.PolarizationCovalent11, tmp)
-                # if len(covalent13) > 0:
-                #     forces["AmoebaMultipoleForce"].setCovalentMap(ni, AmoebaMultipoleForce.PolarizationCovalent12,covalent13)
-                # if len(covalent14) > 0:
-                #     forces["AmoebaMultipoleForce"].setCovalentMap(ni, AmoebaMultipoleForce.PolarizationCovalent13, covalent14)
+                tmp = [a for a in covalent12] + [a for a in covalent13] + [a for a in covalent14] + [ni]
+                forces["AmoebaMultipoleForce"].setCovalentMap(ni, AmoebaMultipoleForce.PolarizationCovalent11, tmp)
                 if len(covalent15) > 0:
-                    # forces["AmoebaMultipoleForce"].setCovalentMap(ni, AmoebaMultipoleForce.PolarizationCovalent14, covalent15)
                     q, s, e = forces["NonbondedForce"].getParticleParameters(ni)
                     for atom in covalent15:
                         if atom < ni:
@@ -150,20 +144,20 @@ def run(input_data: InputData):
         system,
         integrator,
         Platform.getPlatformByName("CUDA"),
-        {"Precision": "mixed", "DeviceIndex": deviceid},
+        {"Precision": "mixed"},#, "DeviceIndex": deviceid},
     )
     if top.getPeriodicBoxVectors():
         simulation.context.setPeriodicBoxVectors(*top.getPeriodicBoxVectors())
     simulation.context.setPositions(positions)
     simulation.minimizeEnergy()
 
-    # equ_nsteps = round(1 * unit.nanosecond / (timestep * unit.femtosecond))
-    # try:
-    #     simulation.step(equ_nsteps)
-    #     simulation.reporters.clear()
-    # except (ValueError, openmm.OpenMMException) as error:
-    #     print(error)
-    #     return "Failed"
+    equ_nsteps = round(1 * unit.nanosecond / (timestep * unit.femtosecond))
+    try:
+        simulation.step(equ_nsteps)
+        simulation.reporters.clear()
+    except (ValueError, openmm.OpenMMException) as error:
+        print(error)
+        return "Failed"
 
     simulation_time = input_data.simulation_time_ns
     nsteps = round(
