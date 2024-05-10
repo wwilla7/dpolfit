@@ -261,10 +261,6 @@ def calc_properties(**kwargs):
     eps = prefactor * variance * (1 / average_volumes)
 
     if amoeba:
-        try:
-            del qs
-        except UnboundLocalError:
-            print("Possibly using AmoebaVdwForce")
         parameters = [
             MultForce.getMultipoleParameters(ni)
             for ni in range(system.getNumParticles())

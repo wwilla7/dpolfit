@@ -6,7 +6,7 @@ from openff.toolkit.topology import Molecule
 from openff.units import unit
 from qcelemental.models.molecule import Molecule as qcMolecule
 from openmm.app import PDBFile, Residue, Chain, Topology
-
+from openmm import unit as omm_unit
 
 mapped_smile_field = OEField(
     "canonical_isomeric_explicit_hydrogen_mapped_smiles", OEStringType
@@ -100,3 +100,15 @@ def create_monomer(pdb_file: str, output_file: str):
     PDBFile.writeFile(new_top, new_pos, open(output_file, "w"))
 
     return output_file
+
+def remove_unit_for_xml(v):
+    if isinstance(v, omm_unit.quantity.Quantity):
+        return str(v.value_in_unit(v.unit))
+    elif isinstance(v, unit.Quantity):
+        return str(v.m_as(v.units))
+    elif isinstance(v, float):
+        return str(v)
+    elif isinstance(v, int):
+        return str(v)
+    else:
+        return v
