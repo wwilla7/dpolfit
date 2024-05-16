@@ -21,7 +21,7 @@ from openmm import (
     Platform,
     XmlSerializer,
     unit,
-    Vec3
+    Vec3,
 )
 from openmm.app import PDBFile, Simulation
 from scipy.optimize import minimize
@@ -163,6 +163,7 @@ def calc_properties(**kwargs):
     forces = {}
     if mpid:
         import mpidplugin
+
         for idx, force in enumerate(system.getForces()):
             force_name = force.__class__.__name__
             force.setForceGroup(idx)
@@ -186,7 +187,6 @@ def calc_properties(**kwargs):
                         for i in range(system.getNumParticles())
                     ]
                 )
-
 
     pdb_file = os.path.join(l_p, "output.pdb")
     pdb = PDBFile(pdb_file)
@@ -269,8 +269,12 @@ def calc_properties(**kwargs):
             alphas = np.array([np.mean(p[-1]) for p in parameters])
             qs = np.array([p[0] for p in parameters])
         else:
-            alphas = np.array([p[-1].value_in_unit(unit.nanometer**3) for p in parameters])
-            qs = np.array([p[0].value_in_unit(unit.elementary_charge) for p in parameters])
+            alphas = np.array(
+                [p[-1].value_in_unit(unit.nanometer**3) for p in parameters]
+            )
+            qs = np.array(
+                [p[0].value_in_unit(unit.elementary_charge) for p in parameters]
+            )
         sum_alphas = Q_(np.sum(alphas), "nm**3").to("a0**3").magnitude
         eps_infty = prefactor00 * (1 / average_volumes) * sum_alphas + 1
 
@@ -370,7 +374,6 @@ def calc_properties(**kwargs):
         )
         gas_simulation.context.setPositions(gas_positions)
         induced = GasMultForce.getInducedDipoles(gas_simulation.context)
-
 
     gas_dipole = dipole_moments(
         positions=np.array(gas_positions.value_in_unit(unit.nanometer)),

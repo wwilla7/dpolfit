@@ -101,6 +101,7 @@ def create_monomer(pdb_file: str, output_file: str):
 
     return output_file
 
+
 def remove_unit_for_xml(v):
     if isinstance(v, omm_unit.quantity.Quantity):
         return str(v.value_in_unit(v.unit))

@@ -4,7 +4,8 @@ This module contains functions to customize openmm xml force field files.
 """
 
 import os
-#from pprint import pprint
+
+# from pprint import pprint
 from collections import defaultdict
 from datetime import datetime
 
@@ -16,8 +17,13 @@ from lxml import etree
 from openeye import oechem
 from openff.toolkit import ForceField, Molecule
 
-from openmm import (AmoebaMultipoleForce, HarmonicAngleForce,
-                    HarmonicBondForce, NonbondedForce, PeriodicTorsionForce)
+from openmm import (
+    AmoebaMultipoleForce,
+    HarmonicAngleForce,
+    HarmonicBondForce,
+    NonbondedForce,
+    PeriodicTorsionForce,
+)
 
 
 def get_ff_structure(atoms: list, residue: list):
@@ -135,17 +141,16 @@ def write_ff_xml(data: dict) -> str:
     return data
 
 
-
-def get_pgrp(oemol: oechem.OEMol) -> dict, dict:
+def get_pgrp(oemol: oechem.OEMol) -> (dict, dict):
     """
     Function to define polarization group based on rotatable bonds
 
     :param oemol: input molecule
     :type oemol: oechem.OEMol
-    :return: polarization groups and atom type maps. 
-    :rtype: dict
+    :return: polarization groups and atom type maps.
+    :rtype: (dict, dict)
     """
-    
+
     oechem.OEPerceiveSymmetry(oemol, includeH=True)
     pairs = defaultdict(list)
     for atom in oemol.GetAtoms():
@@ -153,9 +158,9 @@ def get_pgrp(oemol: oechem.OEMol) -> dict, dict:
     typemaps = {}
     for idx, (_, pair) in enumerate(pairs.items()):
         for atom in pair:
-            typemaps[atom.GetIdx()] = { 
+            typemaps[atom.GetIdx()] = {
                 k: f"4{idx+1:02d}" for k in ["name", "class", "type"]
-        } | {"rname": f"4{atom.GetIdx()+1:02d}"}
+            } | {"rname": f"4{atom.GetIdx()+1:02d}"}
 
     bonds = defaultdict(list)
     oechem.OEFindRingAtomsAndBonds(oemol)
@@ -183,6 +188,7 @@ def get_pgrp(oemol: oechem.OEMol) -> dict, dict:
             pgrp[typemaps[b]["type"]].add(typemaps[a]["type"])
 
     return pgrp, typemaps
+
 
 def create_forcefield(
     polarizability: dict,
@@ -254,7 +260,6 @@ def create_forcefield(
 
     ff_data = get_ff_structure(atoms, residue)
 
-
     for force in system.getForces():
         force_name = force.__class__.__name__
         if isinstance(force, NonbondedForce):
@@ -298,7 +303,10 @@ def create_forcefield(
                     "polarizability": np.round(pol_dict[ni], 9).astype(str),
                     "thole": "0.0",
                 }
-                pols |= {f"pgrp{i+1}": v for i, v in enumerate(pgrp[omm_atom_maps[ni]["type"]])}
+                pols |= {
+                    f"pgrp{i+1}": v
+                    for i, v in enumerate(pgrp[omm_atom_maps[ni]["type"]])
+                }
 
                 if pols in this_param:
                     pass

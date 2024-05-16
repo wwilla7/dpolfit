@@ -19,5 +19,9 @@ kb = Q_(1, ureg.boltzmann_constant).to("kJ/kelvin")
 na = Q_(1, "N_A")
 kb_u = (kb / (1 / na).to("mole")).to("kJ/kelvin/mole")
 
-opc3Epol = (Q_((2.43-1.855), "debye").to("e*angstrom")**2/(2*Q_(1.44, "angstrom**3"))).to("e**2/a0") # hartree
-opc3Epolkjmol = Q_(opc3Epol.magnitude, "hartree").to("kJ")/(1/na).to("mole")
+opc3Epol = (
+    Q_((2.43 - 1.855), "debye").to("e*angstrom") ** 2 / (2 * Q_(1.44, "angstrom**3"))
+).to(
+    "e**2/a0"
+)  # hartree
+opc3Epolkjmol = Q_(opc3Epol.magnitude, "hartree").to("kJ") / (1 / na).to("mole")

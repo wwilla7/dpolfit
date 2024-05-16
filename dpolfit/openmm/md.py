@@ -1,13 +1,27 @@
 import os
-import shutil
 
 from pydantic.dataclasses import Field, dataclass
 
 import openmm
-from openmm import (AmoebaMultipoleForce, LangevinIntegrator,
-                    MonteCarloBarostat, Platform, XmlSerializer, unit)
-from openmm.app import (PME, DCDReporter, ForceField, HBonds, NoCutoff,
-                        PDBFile, PDBReporter, Simulation, StateDataReporter)
+from openmm import (
+    AmoebaMultipoleForce,
+    LangevinIntegrator,
+    MonteCarloBarostat,
+    Platform,
+    XmlSerializer,
+    unit,
+)
+from openmm.app import (
+    PME,
+    DCDReporter,
+    ForceField,
+    HBonds,
+    NoCutoff,
+    PDBFile,
+    PDBReporter,
+    Simulation,
+    StateDataReporter,
+)
 
 
 @dataclass(config=dict(validate_assignment=True))
@@ -26,6 +40,12 @@ class InputData:
 
 
 def run(input_data: InputData):
+    """
+    Run a simple plain MD with input information
+
+    :param input_data: input information
+    :type input_data: InputData
+    """
 
     if input_data.work_dir == "None":
         work_dir = os.getcwd()
@@ -34,8 +54,7 @@ def run(input_data: InputData):
         os.makedirs(work_dir, exist_ok=True)
         os.chdir(work_dir)
 
-    ff_file = input_data.forcefield.split(' ')
-    for f in ff_file:
+    ff_file = input_data.forcefield.split(" ")
 
     forcefield = ForceField(*ff_file)
     timestep = input_data.timestep
@@ -85,23 +104,23 @@ def run(input_data: InputData):
     # we want to check if tye system has the same nonbonded exception
     # if not, we want to correct it
     if use_amoeba:
-       forces = {force.__class__.__name__: force for force in system.getForces()}
-       if "NonbondedForce" in list(forces.keys()):
-           for ni in range(system.getNumParticles()):
-               covalent15 = forces["AmoebaMultipoleForce"].getCovalentMap(
-                   ni, AmoebaMultipoleForce.Covalent15
-               )
-               if len(covalent15) > 0:
-                   q, s, e = forces["NonbondedForce"].getParticleParameters(ni)
-                   for atom in covalent15:
-                       if atom < ni:
-                           forces["NonbondedForce"].addException(
-                               particle1=ni,
-                               particle2=atom,
-                               chargeProd=q * unit.elementary_charge,
-                               sigma=s,
-                               epsilon=e,
-                           )
+        forces = {force.__class__.__name__: force for force in system.getForces()}
+        if "NonbondedForce" in list(forces.keys()):
+            for ni in range(system.getNumParticles()):
+                covalent15 = forces["AmoebaMultipoleForce"].getCovalentMap(
+                    ni, AmoebaMultipoleForce.Covalent15
+                )
+                if len(covalent15) > 0:
+                    q, s, e = forces["NonbondedForce"].getParticleParameters(ni)
+                    for atom in covalent15:
+                        if atom < ni:
+                            forces["NonbondedForce"].addException(
+                                particle1=ni,
+                                particle2=atom,
+                                chargeProd=q * unit.elementary_charge,
+                                sigma=s,
+                                epsilon=e,
+                            )
 
     with open("system.xml", "w") as file:
         file.write(XmlSerializer.serialize(system))
@@ -114,7 +133,7 @@ def run(input_data: InputData):
         system,
         integrator,
         Platform.getPlatformByName("CUDA"),
-        {"Precision": "mixed"},#, "DeviceIndex": deviceid},
+        {"Precision": "mixed"},  # , "DeviceIndex": deviceid},
     )
     if top.getPeriodicBoxVectors():
         simulation.context.setPeriodicBoxVectors(*top.getPeriodicBoxVectors())

@@ -146,7 +146,9 @@ def psi4_esps(
     return 0
 
 
-def worker(input_file: str, wd: str, maxconf:int=10, imposed_fields:dict=perturb_dipoles) -> str:
+def worker(
+    input_file: str, wd: str, maxconf: int = 10, imposed_fields: dict = perturb_dipoles
+) -> str:
     """
     The main function to carry out geometry optimization
     and QM ESPs generation.
