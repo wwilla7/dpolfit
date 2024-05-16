@@ -4,23 +4,20 @@ This module contains functions to customize openmm xml force field files.
 """
 
 import os
-from datetime import datetime
 #from pprint import pprint
+from collections import defaultdict
+from datetime import datetime
 
 import numpy as np
-from lxml import etree
-
-from openff.toolkit import ForceField, Molecule
 from dpolfit.fitting.respdpol import assign_polarizability
 from dpolfit.utilities.constants import a03_to_nm3
 from dpolfit.utilities.miscellaneous import remove_unit_for_xml
-from openmm import (
-    AmoebaMultipoleForce,
-    NonbondedForce,
-    HarmonicAngleForce,
-    HarmonicBondForce,
-    PeriodicTorsionForce,
-)
+from lxml import etree
+from openeye import oechem
+from openff.toolkit import ForceField, Molecule
+
+from openmm import (AmoebaMultipoleForce, HarmonicAngleForce,
+                    HarmonicBondForce, NonbondedForce, PeriodicTorsionForce)
 
 
 def get_ff_structure(atoms: list, residue: list):
@@ -39,6 +36,8 @@ def get_ff_structure(atoms: list, residue: list):
             "parameters": [],
             "attrs": {"coulomb14scale": "0.8333333333", "lj14scale": "0.5"},
         },
+        # "MPIDForce": {"tags": ["Multipole", "Polarize"], "parameters": {"multipole": [], "polarize": []},
+        #               "attrs": {"coulomb14scale": "1.0"},},}
         "AmoebaMultipoleForce": {
             "tags": ["Multipole", "Polarize"],
             "parameters": {"multipole": [], "polarize": []},
@@ -136,90 +135,54 @@ def write_ff_xml(data: dict) -> str:
     return data
 
 
-def update_ff(ff_file: str, parameters: dict) -> str:
+
+def get_pgrp(oemol: oechem.OEMol) -> dict, dict:
     """
-    [TODO:description]
+    Function to define polarization group based on rotatable bonds
 
-    :param ff_file: [TODO:description]
-    :type ff_file: str
-    :param parameters: [TODO:description]
-    :type parameters: dict
-    :return: [TODO:description]
-    :rtype: str
-    """
-    tree = etree.parse(ff_file)
-    root = tree.getroot()
-
-    for k, v in parameters.items():
-        ret = root.findall(k)
-        for vn, vv in v.items():
-            for r in ret:
-                r.set(vn, str(vv))
-
-    q1 = root.findall("./AmoebaMultipoleForce/Multipole[@type='401']")
-    q2 = root.findall("./AmoebaMultipoleForce/Multipole[@type='402']")
-    q2[0].set("c0", str(-0.5 * float(q1[0].attrib["c0"])))
-
-    d = root.find(".//DateGenerated")
-    d.text = f'{datetime.now().strftime("%m-%d-%Y %H:%M:%S")} on {os.uname().nodename}'
-
-    etree.indent(tree, "  ")
-    ret = etree.tostring(tree, encoding="utf-8", pretty_print=True).decode("utf-8")
-
-    return ret
-
-
-def update_results(input_array: np.array, parameters: dict) -> dict:
-    """
-    Update the parameters with new data split out from the optimizer
-
-    # tests:
-    # data = json.load(open("updates.json", "r"))
-    # ret = update_from_template(np.random.rand(7), data)
-    # print(ret)
-
-    :param input_array: [TODO:description]
-    :type input_array: np.array
-    :param parameters: [TODO:description]
-    :type parameters: dict
-    :return: [TODO:description]
+    :param oemol: input molecule
+    :type oemol: oechem.OEMol
+    :return: polarization groups and atom type maps. 
     :rtype: dict
     """
+    
+    oechem.OEPerceiveSymmetry(oemol, includeH=True)
+    pairs = defaultdict(list)
+    for atom in oemol.GetAtoms():
+        pairs[atom.GetSymmetryClass()].append(atom)
+    typemaps = {}
+    for idx, (_, pair) in enumerate(pairs.items()):
+        for atom in pair:
+            typemaps[atom.GetIdx()] = { 
+                k: f"4{idx+1:02d}" for k in ["name", "class", "type"]
+        } | {"rname": f"4{atom.GetIdx()+1:02d}"}
 
-    data = input_array.tolist()
+    bonds = defaultdict(list)
+    oechem.OEFindRingAtomsAndBonds(oemol)
+    for bond in oemol.GetBonds():
+        group = False
+        ba = bond.GetBgn()
+        ea = bond.GetEnd()
+        if not bond.IsRotor():
+            group = True
+            if ba.GetAtomicNum() == ea.GetAtomicNum():
+                group = False
+        else:
+            if ba.GetAtomicNum() == ea.GetAtomicNum():
+                group = True
 
-    for k, v in parameters.items():
-        for vn in v:
-            v[vn] = data.pop(0)
+        if group:
+            b = bond.GetBgnIdx()
+            e = bond.GetEndIdx()
+            bonds[b].append(e)
+            bonds[e].append(b)
 
-    return parameters
+    pgrp = defaultdict(set)
+    for b, es in bonds.items():
+        for a in es:
+            pgrp[typemaps[b]["type"]].add(typemaps[a]["type"])
 
-
-def _get_input(ff_file: str, parameters: dict) -> dict:
-    """
-    [TODO:description]
-
-    :param ff_file: [TODO:description]
-    :type ff_file: str
-    :param parameters: [TODO:description]
-    :type parameters: dict
-    :return: [TODO:description]
-    :rtype: dict
-    """
-
-    tree = etree.parse(ff_file)
-    root = tree.getroot()
-
-    for k, v in parameters.items():
-        ret = root.findall(k)
-        for vn, vv in v.items():
-            for r in ret:
-                dt = r.get(vn)
-                v[vn] = dt
-                print(dt)
-
-    return parameters
-
+    return pgrp, typemaps
 
 def create_forcefield(
     polarizability: dict,
@@ -227,6 +190,20 @@ def create_forcefield(
     mol2_file: str = "molecule.mol2",
     openff: str = "openff_unconstrained-2.2.0.offxml",
 ) -> str:
+    """
+    Function to create force field to use with OpenMM
+
+    :param polarizability: a dictionary contains polarizability parameters
+    :type polarizability: dict
+    :param pol_unit: polarizability unit, defaults to "a0**3"
+    :type pol_unit: str, optional
+    :param mol2_file: molecule file that contains partial charges, defaults to "molecule.mol2"
+    :type mol2_file: str, optional
+    :param openff: the open force field vision to obtain valence terms, defaults to "openff_unconstrained-2.2.0.offxml"
+    :type openff: str, optional
+    :return: force field xml file to create a OpenMM system
+    :rtype: str
+    """
     offmol = Molecule.from_file(mol2_file, file_format="mol2")
     top = offmol.to_topology()
     forcefield = ForceField(openff)
@@ -235,25 +212,11 @@ def create_forcefield(
     )
     n_particles = system.getNumParticles()
 
-    omm_atom_maps = {}
-    charges = {}
-    type_id = 0
-    for idx, q in enumerate(offmol.partial_charges):
-        if q in list(charges.keys()):
-            this_id = charges[q]
-        else:
-            this_id = f"7{type_id:02d}"
-            charges[q] = this_id
-            type_id += 1
-
-        omm_atom_maps[idx] = {
-            k: this_id for k in ["name", "class", "type"]
-        } | {"rname": f"7{idx+1:02d}"}
-
-    omm_top = top.to_openmm()
-
     oemol = offmol.to_openeye()
     oemol = assign_polarizability(oemol, polarizability, pol_unit)
+    pgrp, omm_atom_maps = get_pgrp(oemol)
+
+    omm_top = top.to_openmm()
 
     pol_dict = {
         atom.GetIdx(): atom.GetData("polarizability") * a03_to_nm3
@@ -333,8 +296,9 @@ def create_forcefield(
                 pols = {
                     "type": omm_atom_maps[ni]["type"],
                     "polarizability": np.round(pol_dict[ni], 9).astype(str),
-                    "thole": "0",
+                    "thole": "0.0",
                 }
+                pols |= {f"pgrp{i+1}": v for i, v in enumerate(pgrp[omm_atom_maps[ni]["type"]])}
 
                 if pols in this_param:
                     pass
@@ -414,7 +378,7 @@ def create_forcefield(
     date = etree.SubElement(info, "DateGenerated")
     date.text = today
     author = etree.SubElement(info, "GeneratedBy")
-    author.text = "Willa Wang"
+    author.text = "Liangyue Willa Wang"
     ############ Info ####################
 
     for force, v in ff_data.items():

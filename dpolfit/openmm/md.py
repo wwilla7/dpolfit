@@ -1,29 +1,13 @@
 import os
 import shutil
 
-import openmm
-from openmm import (
-    LangevinIntegrator,
-    MonteCarloBarostat,
-    Platform,
-    XmlSerializer,
-    unit,
-    AmoebaMultipoleForce,
-)
-from openmm.app import (
-    PME,
-    DCDReporter,
-    ForceField,
-    HBonds,
-    PDBFile,
-    NoCutoff,
-    PDBReporter,
-    Simulation,
-    StateDataReporter,
-)
+from pydantic.dataclasses import Field, dataclass
 
-# from dataclasses import dataclass
-from pydantic.dataclasses import dataclass, Field
+import openmm
+from openmm import (AmoebaMultipoleForce, LangevinIntegrator,
+                    MonteCarloBarostat, Platform, XmlSerializer, unit)
+from openmm.app import (PME, DCDReporter, ForceField, HBonds, NoCutoff,
+                        PDBFile, PDBReporter, Simulation, StateDataReporter)
 
 
 @dataclass(config=dict(validate_assignment=True))
@@ -51,6 +35,8 @@ def run(input_data: InputData):
         os.chdir(work_dir)
 
     ff_file = input_data.forcefield.split(' ')
+    for f in ff_file:
+
     forcefield = ForceField(*ff_file)
     timestep = input_data.timestep
     temperature = input_data.temperature * unit.kelvin
@@ -99,39 +85,23 @@ def run(input_data: InputData):
     # we want to check if tye system has the same nonbonded exception
     # if not, we want to correct it
     if use_amoeba:
-        forces = {force.__class__.__name__: force for force in system.getForces()}
-        if "NonbondedForce" in list(forces.keys()) and "Force" not in list(forces.keys()):
-            for ni in range(system.getNumParticles()):
-                for ptype in [
-                    AmoebaMultipoleForce.PolarizationCovalent11,
-                    AmoebaMultipoleForce.PolarizationCovalent12,
-                    AmoebaMultipoleForce.PolarizationCovalent13,
-                    AmoebaMultipoleForce.PolarizationCovalent14,
-                ]:
-                    forces["AmoebaMultipoleForce"].setCovalentMap(ni, ptype, [])
-
-                covalent12 = forces["AmoebaMultipoleForce"].getCovalentMap(ni, AmoebaMultipoleForce.Covalent12)
-                covalent13 = forces["AmoebaMultipoleForce"].getCovalentMap(ni, AmoebaMultipoleForce.Covalent13)
-                covalent14 = forces["AmoebaMultipoleForce"].getCovalentMap(ni, AmoebaMultipoleForce.Covalent14)
-                covalent15 = forces["AmoebaMultipoleForce"].getCovalentMap(
-                    ni, AmoebaMultipoleForce.Covalent15
-                )
-                tmp = [a for a in covalent12] + [a for a in covalent13] + [a for a in covalent14] + [ni]
-                forces["AmoebaMultipoleForce"].setCovalentMap(ni, AmoebaMultipoleForce.PolarizationCovalent11, tmp)
-                if len(covalent15) > 0:
-                    q, s, e = forces["NonbondedForce"].getParticleParameters(ni)
-                    for atom in covalent15:
-                        if atom < ni:
-                            forces["NonbondedForce"].addException(
-                                particle1=ni,
-                                particle2=atom,
-                                chargeProd=q * unit.elementary_charge,
-                                sigma=s,
-                                epsilon=e,
-                            )
-
-
-
+       forces = {force.__class__.__name__: force for force in system.getForces()}
+       if "NonbondedForce" in list(forces.keys()):
+           for ni in range(system.getNumParticles()):
+               covalent15 = forces["AmoebaMultipoleForce"].getCovalentMap(
+                   ni, AmoebaMultipoleForce.Covalent15
+               )
+               if len(covalent15) > 0:
+                   q, s, e = forces["NonbondedForce"].getParticleParameters(ni)
+                   for atom in covalent15:
+                       if atom < ni:
+                           forces["NonbondedForce"].addException(
+                               particle1=ni,
+                               particle2=atom,
+                               chargeProd=q * unit.elementary_charge,
+                               sigma=s,
+                               epsilon=e,
+                           )
 
     with open("system.xml", "w") as file:
         file.write(XmlSerializer.serialize(system))
