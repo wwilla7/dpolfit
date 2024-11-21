@@ -50,7 +50,7 @@ class Ensemble(Enum):
 @dataclass
 class SimulationSettings:
     time_step: Q_ = Q_(2.0, "femtosecond")
-    total_steps: int = 500000 # 1ns
+    total_steps: int = 500000  # 1ns
     temperature: Q_ = Q_(298.15, "kelvin")
     n_moleculues: int = 256
     pressure: Q_ = Q_(1.0, "bar")
@@ -358,7 +358,8 @@ def compute_DielectricProperties(
                     ]
                 )
 
-    all_traj = mdtraj.load_dcd(trajectory_file, top=topology_file)
+    all_traj = mdtraj.load(trajectory_file, top=topology_file)
+    # all_traj = mdtraj.load_dcd(trajectory_file, top=topology_file)
     n_frames = all_traj.n_frames
 
     index = np.floor(n_frames * (use_last_percent / 100)).astype(int)
@@ -390,8 +391,18 @@ def compute_DielectricProperties(
             )
             induced_dipoles[f] = np.array(mpidforce.getInducedDipoles(context))
 
+        charges, polarizabilities = _getChargesPolarizabilities(mpidforce, n_particles)
+        sum_alphas = Q_(np.sum(polarizabilities), "nm**3").to("a0**3")
+        prefactor2 = 1 / vacuum_permittivity
+        high_frequency_dielectric = prefactor2 * (1 / avg_volumes) * sum_alphas + 1
+        molecular_polarizability = Q_(
+            sum(polarizabilities[:n_atom_per_residue]), "nm**3"
+        ).to("angstrom**3")
+
     else:
-        dipole_moments = _getPermanetDipoles(traj.xyz, charges)
+        dipole_moments = _getPermanetDipoles(traj.xyz, charges).to("e*a0").magnitude
+        high_frequency_dielectric = 1
+        molecular_polarizability = Q_(np.nan, "")
 
     ### fluctuation of dipole moments
     avg_sqr_mus_au = np.mean(np.square(dipole_moments), axis=0)
@@ -412,13 +423,8 @@ def compute_DielectricProperties(
         "a0/e**2",
     )
 
-    prefactor2 = 1 / vacuum_permittivity
 
-    charges, polarizabilities = _getChargesPolarizabilities(mpidforce, n_particles)
-
-    sum_alphas = Q_(np.sum(polarizabilities), "nm**3").to("a0**3")
     dielectric = prefactor * variance / avg_volumes
-    high_frequency_dielectric = prefactor2 * (1 / avg_volumes) * sum_alphas + 1
 
     dielectric_constant = dielectric + high_frequency_dielectric
 
@@ -436,8 +442,7 @@ def compute_DielectricProperties(
     condensed_phase = _getResidueDipoles(
         residues, gas_phase.magnitude, induced_dipoles[random_frame]
     )
-    
-    molecular_polarizability = Q_(sum(polarizabilities[:n_atom_per_residue]), "nm**3").to("angstrom**3")
+
 
     ret = Properties(
         DielectricConstant=dielectric_constant,
