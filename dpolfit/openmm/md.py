@@ -22,6 +22,17 @@ from openmm.app import (
     Simulation,
     StateDataReporter,
 )
+from dpolfit.optimization.utils import SimulationSettings, Ensemble
+import mpidplugin
+from sys import stdout
+import logging
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+    stream=stdout,
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
 
 
 @dataclass(config=dict(validate_assignment=True))
@@ -39,7 +50,7 @@ class InputData:
     work_dir: str = "None"
 
 
-def run(input_data: InputData):
+def _run(input_data: InputData):
     """
     Run a simple plain MD with input information
 
@@ -138,26 +149,83 @@ def run(input_data: InputData):
     if top.getPeriodicBoxVectors():
         simulation.context.setPeriodicBoxVectors(*top.getPeriodicBoxVectors())
     simulation.context.setPositions(positions)
+
+    return simulation
+
+
+def run(system_serialized: str, pdb_str: str, simulation_settings: SimulationSettings):
+    logging.info(f"Running simulation {simulation_settings.ensemble.name}")
+    cwd = os.getcwd()
+    work_path = simulation_settings.work_path
+    os.makedirs(work_path, exist_ok=True)
+    os.chdir(work_path)
+
+    timestep = simulation_settings.time_step.to("femtosecond").magnitude
+    temperature = simulation_settings.temperature.to("kelvin").magnitude * unit.kelvin
+
+    system = XmlSerializer.deserialize(system_serialized)
+    with open("input.pdb", "w") as f:
+        f.write(pdb_str)
+    pdb = PDBFile("input.pdb")
+    topology = pdb.topology
+    position = pdb.positions
+
+    integrator = LangevinIntegrator(
+        temperature, 1 / unit.picosecond, timestep * unit.femtosecond
+    )
+
+    if simulation_settings.ensemble.name == Ensemble.NPT.name:
+        logging.debug("Adding a MC Barostat")
+        pressure = simulation_settings.pressure.to("bar").magnitude * unit.bar
+        system.addForce(MonteCarloBarostat(pressure, temperature, 25))
+
+    with open("system.xml", "w") as f:
+        f.write(XmlSerializer.serialize(system))
+
+    simulation = Simulation(
+        topology,
+        system,
+        integrator,
+        Platform.getPlatformByName("CUDA"),
+        {"Precision": "mixed"},  # , "DeviceIndex": deviceid},
+    )
+
+    if topology.getPeriodicBoxVectors() is not None:
+        simulation.context.setPeriodicBoxVectors(*topology.getPeriodicBoxVectors())
+    simulation.context.setPositions(position)
+
     simulation.minimizeEnergy()
+    # simulation.context.setVelocitiesToTemperature(temperature)
 
     equ_nsteps = round(1 * unit.nanosecond / (timestep * unit.femtosecond))
     try:
+        simulation.reporters.append(
+            StateDataReporter(
+                "equilibration.csv",
+                500,
+                speed=True,
+                volume=True,
+                density=True,
+                step=True,
+                potentialEnergy=True,
+                totalEnergy=True,
+                temperature=True,
+            )
+        )
         simulation.step(equ_nsteps)
-        simulation.reporters.clear()
     except (ValueError, openmm.OpenMMException) as error:
         print(error)
+        os.chdir(cwd)
         return "Failed"
 
-    simulation_time = input_data.simulation_time_ns
-    nsteps = round(
-        float(simulation_time) * unit.nanosecond / (timestep * unit.femtosecond)
-    )
+    simulation.reporters.clear()
+    nsteps = simulation_settings.total_steps
     # save trajectory every 100ps
     save_nsteps = round(10 * unit.picosecond / (timestep * unit.femtosecond))
     simulation.reporters.append(
         StateDataReporter(
-            "simulation.log",
-            save_nsteps,
+            "simulation.csv",
+            500,
             totalSteps=nsteps,
             speed=True,
             volume=True,
@@ -170,9 +238,11 @@ def run(input_data: InputData):
     )
     simulation.reporters.append(DCDReporter("trajectory.dcd", save_nsteps))
     simulation.reporters.append(PDBReporter("output.pdb", nsteps))
-    simulation.saveState(input_data.restart)
+    simulation.saveState("restart.xml")
     try:
         simulation.step(nsteps)
+        os.chdir(cwd)
     except (ValueError, openmm.OpenMMException) as error:
+        os.chdir(cwd)
         print(error)
         return "Failed"

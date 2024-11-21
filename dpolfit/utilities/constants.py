@@ -25,3 +25,7 @@ opc3Epol = (
     "e**2/a0"
 )  # hartree
 opc3Epolkjmol = Q_(opc3Epol.magnitude, "hartree").to("kJ") / (1 / na).to("mole")
+
+vacuum_permittivity = (
+    Q_(8.854187812e-12, "F/m").to("e**2/a0/hartree").magnitude
+)  # this is unitless
