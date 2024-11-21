@@ -166,7 +166,7 @@ def create_serialized_system(
     return system_serialized, pdb.getvalue()
 
 
-def get_custom_parms(forcefield: OForceField) -> Tuple[OrderedDict, np.array]:
+def get_custom_parms(forcefield: OForceField) -> Tuple[OrderedDict, np.ndarray]:
 
     to_custom = {
         "custom": defaultdict(OrderedDict),
@@ -279,7 +279,7 @@ def compute_hvap_alpha_kappa(
     return ret
 
 
-def _getChargesPolarizabilities(force, n_particles) -> Tuple[np.array, np.array]:
+def _getChargesPolarizabilities(force, n_particles) -> Tuple[np.ndarray, np.ndarray]:
     chargs = np.zeros(n_particles)
     polarizabilities = np.zeros(n_particles)
     for p in range(n_particles):
@@ -306,8 +306,8 @@ def _getPermanetDipoles(positions, charges) -> Q_:
 
 def _getResidueDipoles(
     residues: Generator,
-    PermanentDipoles: np.array,
-    InducedDipoles: np.array,
+    PermanentDipoles: np.ndarray,
+    InducedDipoles: np.ndarray,
 ) -> Q_:
     """
     positions: mdtraj xyz, unit in nanometer

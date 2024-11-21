@@ -66,9 +66,9 @@ class Worker:
         cls,
         calc_data: Properties,
         ref_data: Properties,
-        new_params: np.array,
-        ini_params: np.array,
-        penalty_priors: Union[np.array, None] = None,
+        new_params: np.ndarray,
+        ini_params: np.ndarray,
+        penalty_priors: Union[np.ndarray, None] = None,
     ):
         nparam = len(new_params)
 
@@ -93,7 +93,7 @@ class Worker:
                     this_objt = abp(x, y, z) if abp(x, y, z) < 1 else 1
                     objt += this_objt
 
-        if isinstance(penalty_priors, np.array):
+        if isinstance(penalty_priors, np.ndarray):
 
             # harmonic penalty function per parameter
             # Gaussian prior distribution to prevent
@@ -167,7 +167,8 @@ class Worker:
             workers = ray.get(workers)
 
         if "Failed" in workers:
-            logging.info("Failed to run simulation with parameters:", input_array)
+            logging.info("Failed to run simulation with parameters")
+            logging.info(input_array)
             objt = 999
 
         else:
@@ -193,7 +194,7 @@ class Worker:
                             ),
                             use_last_percent=self.use_last_percent,
                         )
-                        system = os.path.join(iter_path, s.work_path, "system.xml")
+                        system_file = os.path.join(iter_path, s.work_path, "system.xml")
                         topology_file = os.path.join(
                             iter_path, s.work_path, "output.pdb"
                         )
@@ -243,8 +244,8 @@ class Worker:
     def optimize(
         self,
         opt_method: str = "Nelder-Mead",
-        bounds: Union[np.array, None] = None,
-        penalty_priors: Union[np.array, None] = None,
+        bounds: Union[np.ndarray, None] = None,
+        penalty_priors: Union[np.ndarray, None] = None,
     ):
         res = minimize(
             self.worker,
