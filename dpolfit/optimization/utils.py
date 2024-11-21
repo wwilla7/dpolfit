@@ -89,7 +89,7 @@ def read_openmm_output(
     openmm_output: str, use_last_percent: Union[int, float] = 50
 ) -> SimulationOutput:
     df = pd.read_csv(openmm_output, skiprows=[1])
-    use_index = np.floor(len(df) * (use_last_percent / 100)).astype(int)
+    use_index = np.floor(len(df) * (1 - use_last_percent / 100)).astype(int)
     use_df = df.iloc[use_index:]
 
     rho = use_df["Density (g/mL)"].mean(axis=0)
@@ -362,7 +362,7 @@ def compute_DielectricProperties(
     # all_traj = mdtraj.load_dcd(trajectory_file, top=topology_file)
     n_frames = all_traj.n_frames
 
-    index = np.floor(n_frames * (use_last_percent / 100)).astype(int)
+    index = np.floor(n_frames * (1 - use_last_percent / 100)).astype(int)
     traj = all_traj[index:]
     avg_volumes = Q_(
         np.mean(
@@ -423,7 +423,6 @@ def compute_DielectricProperties(
         "a0/e**2",
     )
 
-
     dielectric = prefactor * variance / avg_volumes
 
     dielectric_constant = dielectric + high_frequency_dielectric
@@ -442,7 +441,6 @@ def compute_DielectricProperties(
     condensed_phase = _getResidueDipoles(
         residues, gas_phase.magnitude, induced_dipoles[random_frame]
     )
-
 
     ret = Properties(
         DielectricConstant=dielectric_constant,
