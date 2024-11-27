@@ -18,10 +18,13 @@ from openmm import (
 from openmm.app import PDBFile
 import openmm.unit as omm_unit
 from dpolfit.utilities.constants import kb_u, Q_, ureg, na, kb, vacuum_permittivity
-from mpid_plugin.nonbonded import (
-    MPIDMultipoleHandler,
-    MPIDPolarizabilityHandler,
-)
+try:
+    from mpid_plugin.nonbonded import (
+        MPIDMultipoleHandler,
+        MPIDPolarizabilityHandler,
+    )
+except ImportError as e:
+    print(e)
 from openff.interchange import Interchange
 from openff.interchange.components._packmol import UNIT_CUBE, pack_box
 from openff.toolkit import ForceField as OForceField
@@ -369,17 +372,17 @@ def compute_DielectricProperties(
             list(
                 map(
                     np.linalg.det,
-                    [traj.openmm_boxes(i) / omm_unit.bohr for i in range(index)],
+                    [traj.openmm_boxes(i) / omm_unit.bohr for i in range(traj.n_frames)],
                 )
             )
         ),
         "a0**3",
     )
-
-    dipole_moments = np.zeros((index, 3))
-    induced_dipoles = np.zeros((index, n_particles, 3))
+    n_frames = traj.n_frames
+    dipole_moments = np.zeros((n_frames, 3))
+    induced_dipoles = np.zeros((n_frames, n_particles, 3))
     if MPID:
-        for f in range(index):
+        for f in range(n_frames):
             box = traj.openmm_boxes(frame=f)
             position = traj.openmm_positions(frame=f)
             context.setPeriodicBoxVectors(*box)
@@ -395,20 +398,20 @@ def compute_DielectricProperties(
         sum_alphas = Q_(np.sum(polarizabilities), "nm**3").to("a0**3")
         prefactor2 = 1 / vacuum_permittivity
         high_frequency_dielectric = prefactor2 * (1 / avg_volumes) * sum_alphas + 1
-        molecular_polarizability = Q_(
-            sum(polarizabilities[:n_atom_per_residue]), "nm**3"
-        ).to("angstrom**3")
 
     else:
         dipole_moments = _getPermanetDipoles(traj.xyz, charges).to("e*a0").magnitude
         high_frequency_dielectric = 1
-        molecular_polarizability = Q_(np.nan, "")
+        polarizabilities = np.zeros(n_particles)
+
 
     ### fluctuation of dipole moments
-    avg_sqr_mus_au = np.mean(np.square(dipole_moments), axis=0)
-    avg_mus_sqr_au = np.square(np.mean(dipole_moments, axis=0))
+    # average of the squared magnitudes
+    avg_sqr_mus_au = np.mean(np.square(dipole_moments), axis=0).sum()
+    # the square of the mean vector, dot product of <u> itself 
+    avg_mus_sqr_au = np.square(np.mean(dipole_moments, axis=0)).sum()
 
-    variance = Q_(np.sum(avg_sqr_mus_au - avg_mus_sqr_au), "e**2*a0**2")
+    variance = Q_(avg_sqr_mus_au - avg_mus_sqr_au, "e**2*a0**2")
 
     prefactor = Q_(
         1
@@ -441,6 +444,9 @@ def compute_DielectricProperties(
     condensed_phase = _getResidueDipoles(
         residues, gas_phase.magnitude, induced_dipoles[random_frame]
     )
+    molecular_polarizability = Q_(
+        sum(polarizabilities[:n_atom_per_residue]), "nm**3"
+    ).to("angstrom**3")
 
     ret = Properties(
         DielectricConstant=dielectric_constant,
@@ -476,7 +482,7 @@ def compute(
         trajectory_file=trajectory_file,
         use_last_percent=use_last_percent,
         temperature=temperature,
-        MPID=True,
+        MPID=MPID,
     )
     p2.Density = p1.Density
     p2.HeatOfVaporization = p1.HeatOfVaporization
