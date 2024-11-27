@@ -23,7 +23,10 @@ from openmm.app import (
     StateDataReporter,
 )
 from dpolfit.optimization.utils import SimulationSettings, Ensemble
-import mpidplugin
+try:
+    import mpidplugin
+except ImportError as e:
+    print(e)
 from sys import stdout
 import logging
 
@@ -212,6 +215,7 @@ def run(system_serialized: str, pdb_str: str, simulation_settings: SimulationSet
                 temperature=True,
             )
         )
+        # simulation.reporters.append(DCDReporter("equilibration.dcd", 500))
         simulation.step(equ_nsteps)
     except (ValueError, openmm.OpenMMException) as error:
         print(error)
