@@ -130,6 +130,7 @@ class Worker:
         logging.debug(input_array)
         this_iteration = self.interation.iteration_number
         logging.info(f"Running iteration {this_iteration}")
+        logging.info(input_array)
         iter_path = os.path.join(self.work_path, f"iter_{this_iteration:02d}")
         # TODO restart the optimization
         if os.path.exists(iter_path):

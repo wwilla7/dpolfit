@@ -18,6 +18,7 @@ from openmm import (
 from openmm.app import PDBFile
 import openmm.unit as omm_unit
 from dpolfit.utilities.constants import kb_u, Q_, ureg, na, kb, vacuum_permittivity
+
 try:
     from mpid_plugin.nonbonded import (
         MPIDMultipoleHandler,
@@ -86,6 +87,27 @@ class SimulationOutput:
     speed: Q_ = Q_(np.nan, "ns/day")
     box_volume: Q_ = Q_(np.nan, "nm**3")
     potential_energy: Q_ = Q_(np.nan, "kJ/mol")
+
+
+@dataclass
+@dataclass
+class BlockAverageResult:
+    """
+    A data class to store the results of block averaging.
+
+    Attributes:
+        block_averages (np.ndarray): The average of the data within each block.
+        overall_average (np.ndarray): The overall average computed from block averages.
+        sigma_block (np.ndarray): The standard deviation of the block averages.
+        sem (np.ndarray): The standard error of the mean (SEM).
+        confidence_interval (np.ndarray): The 95% confidence interval for the overall average.
+    """
+
+    block_averages: np.ndarray
+    overall_average: np.ndarray
+    sigma_block: np.ndarray
+    sem: np.ndarray
+    confidence_interval: np.ndarray
 
 
 def read_openmm_output(
@@ -300,9 +322,6 @@ def _getPermanetDipoles(positions, charges) -> Q_:
     """
 
     dipole_moments = np.dot(positions.transpose(0, 2, 1), charges)
-    # avg_dipole_moments = Q_(np.linalg.norm(dipole_moments, axis=1).mean(), "e*nm").to(
-    #     "debye"
-    # )
 
     return Q_(dipole_moments, "e*nm")
 
@@ -362,7 +381,6 @@ def compute_DielectricProperties(
                 )
 
     all_traj = mdtraj.load(trajectory_file, top=topology_file)
-    # all_traj = mdtraj.load_dcd(trajectory_file, top=topology_file)
     n_frames = all_traj.n_frames
 
     index = np.floor(n_frames * (1 - use_last_percent / 100)).astype(int)
@@ -372,7 +390,10 @@ def compute_DielectricProperties(
             list(
                 map(
                     np.linalg.det,
-                    [traj.openmm_boxes(i) / omm_unit.bohr for i in range(traj.n_frames)],
+                    [
+                        traj.openmm_boxes(i) / omm_unit.bohr
+                        for i in range(traj.n_frames)
+                    ],
                 )
             )
         ),
@@ -404,14 +425,22 @@ def compute_DielectricProperties(
         high_frequency_dielectric = 1
         polarizabilities = np.zeros(n_particles)
 
-
     ### fluctuation of dipole moments
-    # average of the squared magnitudes
-    avg_sqr_mus_au = np.mean(np.square(dipole_moments), axis=0).sum()
-    # the square of the mean vector, dot product of <u> itself 
-    avg_mus_sqr_au = np.square(np.mean(dipole_moments, axis=0)).sum()
+    #### average of the squared magnitudes
+    ### avg_sqr_mus_au = np.mean(np.square(dipole_moments), axis=0).sum()
+    #### the square of the mean vector, dot product of <u> itself
+    ###  avg_mus_sqr_au = np.square(np.mean(dipole_moments, axis=0)).sum()
 
-    variance = Q_(avg_sqr_mus_au - avg_mus_sqr_au, "e**2*a0**2")
+    ###variance = Q_(avg_sqr_mus_au - avg_mus_sqr_au, "e**2*a0**2")
+
+    # TODO implement block averaging for dielectric constant
+    avg_sqr_mus_au_ret = block_average(dipole_moments**2, 100)
+    avg_mus_au_ret = block_average(dipole_moments, 100)
+    variance = Q_(
+        avg_sqr_mus_au_ret.block_averages.sum(axis=1)
+        - ((avg_mus_au_ret.block_averages) ** 2).sum(axis=1),
+        "e**2*a0**2",
+    )
 
     prefactor = Q_(
         1
@@ -429,6 +458,10 @@ def compute_DielectricProperties(
     dielectric = prefactor * variance / avg_volumes
 
     dielectric_constant = dielectric + high_frequency_dielectric
+
+    dielectric_constant_block = block_average(dielectric_constant, 1)
+    logging.info("95% Confidence Interval of dielectric constant:")
+    logging.info(dielectric_constant_block.confidence_interval)
 
     # Residue Dipole
     pdb = PDBFile(topology_file)
@@ -449,7 +482,7 @@ def compute_DielectricProperties(
     ).to("angstrom**3")
 
     ret = Properties(
-        DielectricConstant=dielectric_constant,
+        DielectricConstant=dielectric_constant_block.overall_average,
         LiquidPhaseDipole=condensed_phase.to("debye"),
         GasPhaseDipole=Q_(np.linalg.norm(gas_phase), "e*nm").to("debye"),
         MolecularPolarizability=molecular_polarizability,
@@ -490,3 +523,87 @@ def compute(
     p2.IsothermalCompressibility = p1.IsothermalCompressibility
 
     return p2
+
+
+def block_average(data: np.ndarray, block_size: int = 1000, axis: int = 0):
+    """
+    Perform block averaging on a multi-dimensional array along a specified axis.
+
+    The data is divided into non-overlapping blocks along the specified axis.
+    The average of each block is computed, and the overall average,
+    standard deviation of the block averages, and the standard error of the mean (SEM)
+    are also returned as uncertainty estimates.
+
+    Args:
+        data (np.ndarray): Input multi-dimensional array to be block-averaged.
+                            The function will average along the specified axis.
+        block_size (int): Size of each block. The total number of blocks along the
+                          specified axis is determined by dividing the length of
+                          that axis by `block_size`. Default is 1000.
+        axis (int, optional): The axis along which to perform the block averaging.
+                              Default is 0 (the last axis).
+
+    Returns:
+        tuple:
+            block_averages (np.ndarray): The array of block-averaged values.
+            overall_average (np.ndarray): The average of the block averages
+                                          (final estimate of the quantity).
+            sigma_block (np.ndarray): The standard deviation of the block averages
+                                       (error estimate).
+            sem (np.ndarray): The standard error of the mean (uncertainty in the
+                              overall average).
+
+    Raises:
+        ValueError: If `block_size` does not divide the length of the specified axis
+                    exactly, a ValueError will be raised.
+
+    Example:
+        >>> data = np.random.normal(loc=1.0, scale=0.2, size=(1000, 10))  # 1000 time steps, 10 particles
+        >>> block_size = 50
+        >>> block_averages, overall_average, sigma_block, sem = block_average(data, block_size, axis=0)
+        >>> print("Block Averages:", block_averages)
+        >>> print("Overall Average:", overall_average)
+    """
+
+    # Check if block_size divides the size of the specified axis
+    if data.shape[axis] % block_size != 0:
+        raise ValueError(
+            f"The block_size ({block_size}) must divide the size of the specified axis ({data.shape[axis]}) exactly."
+        )
+
+    # Determine the number of blocks along the specified axis
+    n_blocks = data.shape[axis] // block_size
+
+    # Reshape the data to group it into blocks along the specified axis
+    shape = list(data.shape)
+    shape[axis] = n_blocks
+    shape.insert(axis + 1, block_size)
+
+    # Reshape the data into blocks
+    reshaped_data = np.reshape(data, shape)
+
+    # Take the mean of each block (along the new axis created by reshaping)
+    block_averages = np.mean(reshaped_data, axis=axis + 1)
+
+    # Compute the overall average of block averages
+    overall_average = np.mean(block_averages, axis=axis)
+
+    # Standard deviation of block averages (error estimate)
+    sigma_block = np.std(block_averages, axis=axis)
+
+    # Standard error of the mean (SEM)
+    sem = sigma_block / np.sqrt(n_blocks)
+
+    # Compute the 95% confidence interval
+    z_score = 1.96  # Z-score for 95% confidence level
+    confidence_interval = z_score * sem
+
+    ret = BlockAverageResult(
+        block_averages=block_averages,
+        overall_average=overall_average,
+        sigma_block=sigma_block,
+        sem=sem,
+        confidence_interval=confidence_interval,
+    )
+
+    return ret
