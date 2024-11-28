@@ -113,3 +113,14 @@ def remove_unit_for_xml(v):
         return str(v)
     else:
         return v
+
+
+def get_angle(a, b, c):
+    ret = np.arccos((c**2 - a**2 - b**2) / (-2 * a * b)) * 180 / np.pi
+    return ret
+
+
+def get_bond_length(a, b, theta):
+    theta = theta * np.pi / 180
+    ret = np.sqrt(a**2 + b**2 - 2 * a * b * np.cos(theta))
+    return ret
