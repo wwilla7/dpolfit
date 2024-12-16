@@ -45,6 +45,8 @@ logging.basicConfig(
 ureg.define("alpha_unit = 1e-4/kelvin")
 ureg.define("kappa_unit = 1e-6/bar")
 
+DEBUG = 1
+
 
 class Ensemble(Enum):
     NVT = "NVT"
@@ -431,16 +433,20 @@ def compute_DielectricProperties(
     #### the square of the mean vector, dot product of <u> itself
     ###  avg_mus_sqr_au = np.square(np.mean(dipole_moments, axis=0)).sum()
 
-    ###variance = Q_(avg_sqr_mus_au - avg_mus_sqr_au, "e**2*a0**2")
+    ### variance = Q_(avg_sqr_mus_au - avg_mus_sqr_au, "e**2*a0**2")
 
     # TODO implement block averaging for dielectric constant
-    avg_sqr_mus_au_ret = block_average(dipole_moments**2, 100)
-    avg_mus_au_ret = block_average(dipole_moments, 100)
+    n_block = 10
+    avg_sqr_mus_au_ret = block_average(dipole_moments**2, n_block)
+    avg_mus_au_ret = block_average(dipole_moments, n_block)
     variance = Q_(
         avg_sqr_mus_au_ret.block_averages.sum(axis=1)
         - ((avg_mus_au_ret.block_averages) ** 2).sum(axis=1),
         "e**2*a0**2",
     )
+
+    if DEBUG == 1:
+        np.save("dipole_moments.npy", dipole_moments)
 
     prefactor = Q_(
         1
@@ -459,14 +465,14 @@ def compute_DielectricProperties(
 
     dielectric_constant = dielectric + high_frequency_dielectric
 
-    dielectric_constant_block = block_average(dielectric_constant, 1)
+    dielectric_constant_block = block_average(dielectric_constant, n_block)
     logging.info("95% Confidence Interval of dielectric constant:")
     logging.info(dielectric_constant_block.confidence_interval)
 
     # Residue Dipole
     pdb = PDBFile(topology_file)
     residues = pdb.topology.residues()
-    random_frame = np.random.randint(1, index)
+    random_frame = np.random.randint(1, n_frames)
     n_atom_per_residue = int(pdb.topology.getNumAtoms() / pdb.topology.getNumResidues())
     gas_phase = _getPermanetDipoles(
         positions=np.array(
@@ -488,7 +494,7 @@ def compute_DielectricProperties(
         MolecularPolarizability=molecular_polarizability,
     )
 
-    return ret
+    return ret, dielectric_constant_block.confidence_interval
 
 
 def compute(
@@ -509,7 +515,7 @@ def compute(
     p1 = compute_hvap_alpha_kappa(
         gas_mdLog, liquid_mdLog, liquid_mdSettings, calc_hvap=True
     )
-    p2 = compute_DielectricProperties(
+    p2, epsilon_ci = compute_DielectricProperties(
         system=system,
         topology_file=topology_file,
         trajectory_file=trajectory_file,
@@ -522,10 +528,10 @@ def compute(
     p2.ThermalExpansion = p1.ThermalExpansion
     p2.IsothermalCompressibility = p1.IsothermalCompressibility
 
-    return p2
+    return p2, epsilon_ci
 
 
-def block_average(data: np.ndarray, block_size: int = 1000, axis: int = 0):
+def block_average(data: np.ndarray, n_block: int = 20, axis: int = 0):
     """
     Perform block averaging on a multi-dimensional array along a specified axis.
 
@@ -537,9 +543,8 @@ def block_average(data: np.ndarray, block_size: int = 1000, axis: int = 0):
     Args:
         data (np.ndarray): Input multi-dimensional array to be block-averaged.
                             The function will average along the specified axis.
-        block_size (int): Size of each block. The total number of blocks along the
-                          specified axis is determined by dividing the length of
-                          that axis by `block_size`. Default is 1000.
+        n_block (int): The number of blocks along the specified axis.
+                       Default is 1000.
         axis (int, optional): The axis along which to perform the block averaging.
                               Default is 0 (the last axis).
 
@@ -553,34 +558,23 @@ def block_average(data: np.ndarray, block_size: int = 1000, axis: int = 0):
             sem (np.ndarray): The standard error of the mean (uncertainty in the
                               overall average).
 
-    Raises:
-        ValueError: If `block_size` does not divide the length of the specified axis
-                    exactly, a ValueError will be raised.
-
     Example:
         >>> data = np.random.normal(loc=1.0, scale=0.2, size=(1000, 10))  # 1000 time steps, 10 particles
-        >>> block_size = 50
-        >>> block_averages, overall_average, sigma_block, sem = block_average(data, block_size, axis=0)
+        >>> n_block = 50
+        >>> block_averages, overall_average, sigma_block, sem = block_average(data, n_block, axis=0)
         >>> print("Block Averages:", block_averages)
         >>> print("Overall Average:", overall_average)
     """
-
-    # Check if block_size divides the size of the specified axis
-    if data.shape[axis] % block_size != 0:
-        raise ValueError(
-            f"The block_size ({block_size}) must divide the size of the specified axis ({data.shape[axis]}) exactly."
-        )
-
-    # Determine the number of blocks along the specified axis
-    n_blocks = data.shape[axis] // block_size
-
-    # Reshape the data to group it into blocks along the specified axis
-    shape = list(data.shape)
-    shape[axis] = n_blocks
-    shape.insert(axis + 1, block_size)
-
     # Reshape the data into blocks
-    reshaped_data = np.reshape(data, shape)
+
+    block_size = data.shape[axis] // n_block
+    logging.debug(f"block size {block_size}.")
+    used_data = data[-block_size*n_block:] 
+
+    shape = list(used_data.shape)
+    shape[axis] = n_block
+    shape.insert(axis+1, block_size)
+    reshaped_data = np.reshape(used_data, shape) 
 
     # Take the mean of each block (along the new axis created by reshaping)
     block_averages = np.mean(reshaped_data, axis=axis + 1)
@@ -592,7 +586,7 @@ def block_average(data: np.ndarray, block_size: int = 1000, axis: int = 0):
     sigma_block = np.std(block_averages, axis=axis)
 
     # Standard error of the mean (SEM)
-    sem = sigma_block / np.sqrt(n_blocks)
+    sem = sigma_block / np.sqrt(n_block)
 
     # Compute the 95% confidence interval
     z_score = 1.96  # Z-score for 95% confidence level
