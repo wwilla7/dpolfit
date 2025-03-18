@@ -13,6 +13,7 @@ from openmm import (
     LangevinIntegrator,
     XmlSerializer,
     System,
+    Force,
     MonteCarloBarostat,
 )
 from openmm.app import PDBFile
@@ -45,7 +46,7 @@ logging.basicConfig(
 ureg.define("alpha_unit = 1e-4/kelvin")
 ureg.define("kappa_unit = 1e-6/bar")
 
-DEBUG = 1
+DEBUG = 0
 
 
 class Ensemble(Enum):
@@ -58,7 +59,7 @@ class SimulationSettings:
     time_step: Q_ = Q_(2.0, "femtosecond")
     total_steps: int = 500000  # 1ns
     temperature: Q_ = Q_(298.15, "kelvin")
-    n_moleculues: int = 256
+    n_molecules: int = 256
     pressure: Q_ = Q_(1.0, "bar")
     ensemble: Ensemble = Ensemble.NPT
     work_path: str = "298_NPT"
@@ -74,6 +75,7 @@ class IterationRecord:
 class Properties:
     Density: Q_ = Q_(np.nan, "g/mL")
     DielectricConstant: Q_ = Q_(np.nan, "")
+    HighFrequencyDielectricConstant: Q_ = Q_(np.nan, "")
     HeatOfVaporization: Q_ = Q_(np.nan, "kJ/mol")
     ThermalExpansion: Q_ = Q_(np.nan, "alpha_unit")
     IsothermalCompressibility: Q_ = Q_(np.nan, "kappa_unit")
@@ -81,6 +83,7 @@ class Properties:
     LiquidPhaseDipole: Q_ = Q_(np.nan, "debye")
     MolecularPolarizability: Q_ = Q_(np.nan, "angstrom**3")
     Temperature: Q_ = Q_(298.15, "kelvin")
+    SimulationTime: Q_ = Q_(np.nan, "ns")
 
 
 @dataclass
@@ -89,6 +92,7 @@ class SimulationOutput:
     speed: Q_ = Q_(np.nan, "ns/day")
     box_volume: Q_ = Q_(np.nan, "nm**3")
     potential_energy: Q_ = Q_(np.nan, "kJ/mol")
+    simulation_time: Q_ = Q_(np.nan, "ns")
 
 
 @dataclass
@@ -113,22 +117,32 @@ class BlockAverageResult:
 
 
 def read_openmm_output(
-    openmm_output: str, use_last_percent: Union[int, float] = 50
+    openmm_output: str,
+    use_last_percent: Union[int, float] = 50,
+    time_step: Q_ = Q_(2, "fs"),
+    n_block: Union[int, str] = "auto",
 ) -> SimulationOutput:
-    df = pd.read_csv(openmm_output, skiprows=[1])
+
+    with open(openmm_output, "r") as f:
+        df = pd.read_csv(f, skiprows=[1])
     use_index = np.floor(len(df) * (1 - use_last_percent / 100)).astype(int)
     use_df = df.iloc[use_index:]
+    if isinstance(n_block, str):
+        n_block = round(len(use_df) / 10)
 
-    rho = use_df["Density (g/mL)"].mean(axis=0)
+    rho = block_average(use_df["Density (g/mL)"], n_block=n_block).overall_average
     speed = use_df["Speed (ns/day)"].mean(axis=0)
     box_volume = use_df["Box Volume (nm^3)"].values
     potential_energy = use_df["Potential Energy (kJ/mole)"].values
+    nsteps = df['#"Step"'].values[-1]
+    simulation_time = (nsteps * time_step).to("ns")
 
     output_data = SimulationOutput(
         density=Q_(rho, "g/mL"),
         speed=Q_(speed, "ns/day"),
         box_volume=Q_(box_volume, "nm**3"),
         potential_energy=Q_(potential_energy, "kJ/mol"),
+        simulation_time=simulation_time,
     )
 
     return output_data
@@ -254,36 +268,47 @@ def compute_hvap_alpha_kappa(
     liquid_mdLog: SimulationOutput,
     liquid_mdSettings: SimulationSettings,
     calc_hvap=False,
+    n_block: Union[int, str] = "auto",
 ) -> Properties:
 
+    if isinstance(n_block, str):
+        n_block = 20
+
     box_volume = liquid_mdLog.box_volume.to("nm**3")
-    box_volume_mean = box_volume.mean()
+    # box_volume_mean = box_volume.mean()
+    box_volume_mean = block_average(box_volume, n_block).overall_average
     temperature = liquid_mdSettings.temperature.to("kelvin")
     # H = E + PV
     PV_liquid = (
         liquid_mdSettings.pressure.to("bar")
         * box_volume
-        / (liquid_mdSettings.n_moleculues / na.to_base_units())
+        / (liquid_mdSettings.n_molecules / na.to_base_units())
     )
 
     H_liquid = liquid_mdLog.potential_energy.to("kJ/mol") + PV_liquid
-    H_liquid_mean = H_liquid.mean()
+    H_liquid_mean = block_average(H_liquid, n_block).overall_average
 
     kbT = kb_u * temperature
 
     if calc_hvap:
 
         hvap = (
-            gas_mdLog.potential_energy.to("kJ/mol").mean(axis=0)
+            block_average(
+                gas_mdLog.potential_energy.to("kJ/mol"), n_block
+            ).overall_average
+            # gas_mdLog.potential_energy.to("kJ/mol").mean(axis=0)
             + kbT
-            - H_liquid_mean / liquid_mdSettings.n_moleculues
+            - H_liquid_mean / liquid_mdSettings.n_molecules
         )
 
     else:
         hvap = Q_(np.nan, "kJ/mole")
 
     alpha = (
-        ((H_liquid * box_volume).mean(axis=0) - H_liquid_mean * box_volume_mean)
+        (
+            block_average(H_liquid * box_volume, n_block).overall_average
+            - H_liquid_mean * box_volume_mean
+        )
         / box_volume_mean
         / kb_u
         / temperature
@@ -292,7 +317,7 @@ def compute_hvap_alpha_kappa(
 
     kappa = (
         (1 / kb / temperature)
-        * ((box_volume**2).mean() - box_volume_mean**2)
+        * (block_average(box_volume**2, n_block).overall_average - box_volume_mean**2)
         / box_volume_mean
     )
 
@@ -301,6 +326,8 @@ def compute_hvap_alpha_kappa(
         HeatOfVaporization=hvap,
         ThermalExpansion=alpha.to("alpha_unit"),
         IsothermalCompressibility=kappa.to("kappa_unit"),
+        Temperature=liquid_mdSettings.temperature,
+        SimulationTime=liquid_mdLog.simulation_time,
     )
 
     return ret
@@ -346,10 +373,40 @@ def _getResidueDipoles(
         # total = PermanentDipoles + induced_dipoles
         # total_norm = np.linalg.norm(total)
 
-    data.append(total_norm)
-    average_dipoles = Q_(np.mean(data), "nm*e").to("debye")
+        data.append(total_norm)
+    # average_dipoles = Q_(np.mean(data), "nm*e").to("debye")
+    dipoles = Q_(data, "nm*e").to("debye")
 
-    return average_dipoles
+    return dipoles
+
+
+def _getTotalDipoleList(
+    pdb_file: str, traj_file: str, mpidforce: Force, context: Context, n_sample: int
+) -> (Q_, List):
+    traj = mdtraj.load_dcd(traj_file, pdb_file)
+    n_frames = traj.n_frames
+    pdb = PDBFile(pdb_file)
+    r = list(pdb.topology.residues())
+    n_atom_per_residue = int(pdb.topology.getNumAtoms() / pdb.topology.getNumResidues())
+    charges = [
+        mpidforce.getMultipoleParameters(p)[0] for p in range(n_atom_per_residue)
+    ]
+    gas_phase = _getPermanetDipoles(
+        positions=np.array(
+            (pdb.positions / omm_unit.nanometer)[:n_atom_per_residue]
+        ).reshape(1, n_atom_per_residue, 3),
+        charges=charges[:n_atom_per_residue],
+    )
+    ret = []
+    spacing = int(n_frames / n_sample)
+    logger.info(f"total frame: {n_frames}\nspacing: {spacing}")
+    for i in range(0, n_frames, spacing):
+        context.setPositions(traj.openmm_positions(frame=i))
+        induced_dipoles = np.array(mpidforce.getInducedDipoles(context))
+        a = _getResidueDipoles(r, gas_phase.magnitude, induced_dipoles)
+        ret.extend(a.magnitude)
+
+    return gas_phase, ret
 
 
 def compute_DielectricProperties(
@@ -359,6 +416,7 @@ def compute_DielectricProperties(
     use_last_percent: int = 50,
     temperature: omm_unit.Quantity = 298.15 * omm_unit.kelvin,
     MPID: bool = True,
+    n_block: Union[int, str] = "auto",
 ):
     context = create_context(system=system, temperature=temperature)
     n_particles = system.getNumParticles()
@@ -402,8 +460,15 @@ def compute_DielectricProperties(
         "a0**3",
     )
     n_frames = traj.n_frames
+
+    if isinstance(n_block, str):
+        n_block = round(n_frames / 25)
+        if n_block == 0:
+            n_block = 1
+
     dipole_moments = np.zeros((n_frames, 3))
     induced_dipoles = np.zeros((n_frames, n_particles, 3))
+    induced_dipoles_norm = np.zeros((n_frames, 3))
     if MPID:
         for f in range(n_frames):
             box = traj.openmm_boxes(frame=f)
@@ -418,6 +483,7 @@ def compute_DielectricProperties(
             induced_dipoles[f] = np.array(mpidforce.getInducedDipoles(context))
 
         charges, polarizabilities = _getChargesPolarizabilities(mpidforce, n_particles)
+        # dipole_moments = _getPermanetDipoles(traj.xyz, charges).to("e*a0").magnitude
         sum_alphas = Q_(np.sum(polarizabilities), "nm**3").to("a0**3")
         prefactor2 = 1 / vacuum_permittivity
         high_frequency_dielectric = prefactor2 * (1 / avg_volumes) * sum_alphas + 1
@@ -436,7 +502,7 @@ def compute_DielectricProperties(
     ### variance = Q_(avg_sqr_mus_au - avg_mus_sqr_au, "e**2*a0**2")
 
     # TODO implement block averaging for dielectric constant
-    n_block = 10
+    n_block = n_block
     avg_sqr_mus_au_ret = block_average(dipole_moments**2, n_block)
     avg_mus_au_ret = block_average(dipole_moments, n_block)
     variance = Q_(
@@ -466,7 +532,9 @@ def compute_DielectricProperties(
     dielectric_constant = dielectric + high_frequency_dielectric
 
     dielectric_constant_block = block_average(dielectric_constant, n_block)
+    logging.info(temperature)
     logging.info("95% Confidence Interval of dielectric constant:")
+    logging.info(dielectric_constant_block.overall_average)
     logging.info(dielectric_constant_block.confidence_interval)
 
     # Residue Dipole
@@ -489,9 +557,11 @@ def compute_DielectricProperties(
 
     ret = Properties(
         DielectricConstant=dielectric_constant_block.overall_average,
-        LiquidPhaseDipole=condensed_phase.to("debye"),
+        HighFrequencyDielectricConstant=high_frequency_dielectric,
+        LiquidPhaseDipole=np.mean(condensed_phase.to("debye")),
         GasPhaseDipole=Q_(np.linalg.norm(gas_phase), "e*nm").to("debye"),
         MolecularPolarizability=molecular_polarizability,
+        Temperature=Q_(temperature / omm_unit.kelvin, "kelvin"),
     )
 
     return ret, dielectric_constant_block.confidence_interval
@@ -507,13 +577,14 @@ def compute(
     use_last_percent: int = 50,
     calc_hvap=True,
     MPID: bool = True,
-):
+    n_block: Union[int, str] = "auto",
+) -> (Properties, Q_):
     with open(system_file, "r") as f:
         system = XmlSerializer.deserialize(f.read())
 
     temperature = liquid_mdSettings.temperature.to("kelvin").magnitude * omm_unit.kelvin
     p1 = compute_hvap_alpha_kappa(
-        gas_mdLog, liquid_mdLog, liquid_mdSettings, calc_hvap=True
+        gas_mdLog, liquid_mdLog, liquid_mdSettings, calc_hvap=True, n_block=n_block
     )
     p2, epsilon_ci = compute_DielectricProperties(
         system=system,
@@ -522,11 +593,14 @@ def compute(
         use_last_percent=use_last_percent,
         temperature=temperature,
         MPID=MPID,
+        n_block=n_block,
     )
     p2.Density = p1.Density
     p2.HeatOfVaporization = p1.HeatOfVaporization
     p2.ThermalExpansion = p1.ThermalExpansion
     p2.IsothermalCompressibility = p1.IsothermalCompressibility
+    p2.SimulationTime = liquid_mdLog.simulation_time
+    p2.Temperature = liquid_mdSettings.temperature
 
     return p2, epsilon_ci
 
@@ -569,12 +643,12 @@ def block_average(data: np.ndarray, n_block: int = 20, axis: int = 0):
 
     block_size = data.shape[axis] // n_block
     logging.debug(f"block size {block_size}.")
-    used_data = data[-block_size*n_block:] 
+    used_data = data[-block_size * n_block :]
 
     shape = list(used_data.shape)
     shape[axis] = n_block
-    shape.insert(axis+1, block_size)
-    reshaped_data = np.reshape(used_data, shape) 
+    shape.insert(axis + 1, block_size)
+    reshaped_data = np.reshape(used_data, shape)
 
     # Take the mean of each block (along the new axis created by reshaping)
     block_averages = np.mean(reshaped_data, axis=axis + 1)

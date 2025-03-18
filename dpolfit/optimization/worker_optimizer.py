@@ -5,7 +5,7 @@ import os
 from collections import defaultdict
 from sys import stdout
 from typing import Generator, Dict, List, Literal, Tuple, Union
-
+import pandas as pd
 import numpy as np
 import openmm.unit as omm_unit
 import ray
@@ -22,6 +22,7 @@ from dpolfit.optimization.utils import (
     get_custom_parms,
     read_openmm_output,
     set_custom_parms,
+    Q_,
 )
 import shutil
 from openff.interchange import Interchange
@@ -134,9 +135,12 @@ class Worker:
         iter_path = os.path.join(self.work_path, f"iter_{this_iteration:02d}")
         # TODO restart the optimization
         if os.path.exists(iter_path):
-            shutil.rmtree(iter_path)
-            logging.info(f"remove existing {iter_path}")
-        os.makedirs(iter_path)
+            run_md = False
+
+        else:
+            run_md = True
+            os.makedirs(iter_path)
+
         os.chdir(iter_path)
 
         # run all simulation
@@ -159,14 +163,26 @@ class Worker:
             for settings in self.simulation_settings
         ]
 
-        workers = [
-            self.compute_methods[self.ray]["run"](*simulation, settings)
-            for simulation, settings in zip(simulations, self.simulation_settings)
-        ]
+        if run_md:
+            workers = [
+                self.compute_methods[self.ray]["run"](*simulation, settings)
+                for simulation, settings in zip(simulations, self.simulation_settings)
+            ]
 
-        if self.ray:
-            workers = ray.get(workers)
+            if self.ray:
+                workers = ray.get(workers)
 
+        else:
+            logging.info(f"using existing MD run in {iter_path}")
+            workers = [
+                (
+                    "Failed"
+                    if os.path.getsize(os.path.join(setting.work_path, "output.pdb"))
+                    == 0
+                    else 0
+                )
+                for setting in self.simulation_settings
+            ]
         if "Failed" in workers:
             logging.info("Failed to run simulation with parameters")
             logging.info(input_array)
@@ -204,6 +220,13 @@ class Worker:
                         )
                         liquid_mdSettings = s
 
+                try:
+                    gas_mdLog
+                except NameError:
+                    gas_mdLog = SimulationOutput(
+                        potential_energy=Q_([0.0] * 10, "kcal/mol")
+                    )
+
                 compute_workers.append(
                     self.compute_methods[self.ray]["compute"](
                         gas_mdLog=gas_mdLog,
@@ -224,7 +247,8 @@ class Worker:
             else:
                 results = compute_workers
             objt = 0
-            for result in results:
+            data = []
+            for result, ci in results:
                 temp = result.Temperature.magnitude
                 this_objective = Worker.objective(
                     calc_data=result,
@@ -234,6 +258,12 @@ class Worker:
                     penalty_priors=penalty_priors,
                 )
                 objt += this_objective
+                data.append(
+                    {k: v.magnitude for k, v in result.__dict__.items()}
+                    | {"CI": ci.magnitude, "Temperature": float(temp), "objt": this_objective}
+                )
+            dt = pd.DataFrame(data)
+            dt.to_csv("results.csv", index=False)
 
         self.interation = IterationRecord(
             iteration_number=this_iteration + 1, loss_function=objt

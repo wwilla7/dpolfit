@@ -29,3 +29,7 @@ opc3Epolkjmol = Q_(opc3Epol.magnitude, "hartree").to("kJ") / (1 / na).to("mole")
 vacuum_permittivity = (
     Q_(8.854187812e-12, "F/m").to("e**2/a0/hartree").magnitude
 )  # this is unitless
+
+j_per_cm_square_to_mPa = 1e9
+D0_constant = 2.837297
+kbt298_in_joule = 4.11e21

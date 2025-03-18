@@ -156,7 +156,7 @@ def _run(input_data: InputData):
     return simulation
 
 
-def run(system_serialized: str, pdb_str: str, simulation_settings: SimulationSettings):
+def run(system_serialized: str, pdb_str: str, simulation_settings: SimulationSettings, eq_time=1):
     logging.info(f"Running simulation {simulation_settings.ensemble.name}")
     cwd = os.getcwd()
     work_path = simulation_settings.work_path
@@ -200,7 +200,11 @@ def run(system_serialized: str, pdb_str: str, simulation_settings: SimulationSet
     simulation.minimizeEnergy()
     # simulation.context.setVelocitiesToTemperature(temperature)
 
-    equ_nsteps = round(1 * unit.nanosecond / (timestep * unit.femtosecond))
+    equ_nsteps = round(eq_time * unit.nanosecond / (timestep * unit.femtosecond))
+    
+    nsteps = simulation_settings.total_steps
+    save_nsteps = round(10 * unit.picosecond / (timestep * unit.femtosecond))
+
     try:
         simulation.reporters.append(
             StateDataReporter(
@@ -215,17 +219,17 @@ def run(system_serialized: str, pdb_str: str, simulation_settings: SimulationSet
                 temperature=True,
             )
         )
-        # simulation.reporters.append(DCDReporter("equilibration.dcd", 500))
+        simulation.reporters.append(DCDReporter("equilibration.dcd", save_nsteps))
+        simulation.reporters.append(PDBReporter("equilibration.pdb", equ_nsteps))
         simulation.step(equ_nsteps)
+        simulation.saveState("equilibration.xml")
     except (ValueError, openmm.OpenMMException) as error:
         print(error)
         os.chdir(cwd)
         return "Failed"
 
     simulation.reporters.clear()
-    nsteps = simulation_settings.total_steps
-    # save trajectory every 100ps
-    save_nsteps = round(10 * unit.picosecond / (timestep * unit.femtosecond))
+
     simulation.reporters.append(
         StateDataReporter(
             "simulation.csv",
@@ -242,9 +246,9 @@ def run(system_serialized: str, pdb_str: str, simulation_settings: SimulationSet
     )
     simulation.reporters.append(DCDReporter("trajectory.dcd", save_nsteps))
     simulation.reporters.append(PDBReporter("output.pdb", nsteps))
-    simulation.saveState("restart.xml")
     try:
         simulation.step(nsteps)
+        simulation.saveState("restart.xml")
         os.chdir(cwd)
     except (ValueError, openmm.OpenMMException) as error:
         os.chdir(cwd)
