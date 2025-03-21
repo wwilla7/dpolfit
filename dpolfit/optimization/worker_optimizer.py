@@ -33,9 +33,15 @@ from openmm import Context, LangevinIntegrator, Platform, System, XmlSerializer
 from openmm.app import PDBFile
 from scipy.optimize import minimize
 from dpolfit.openmm.md import run
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class OptimizationSettings(SimulationSettings):
+    molecule_smiles: str = "CO"
+    system_id: str = "CO_300"
 
 
 class Worker:
@@ -128,8 +134,8 @@ class Worker:
 
     def setup(
         self,
-        simulation_settings: List[SimulationSettings],
-        reference_data: Dict[Union[float, int], Properties],
+        simulation_settings: List[OptimizationSettings],
+        reference_data: Dict[str, Properties],
         forcefield: OForceField,
         topology: Dict[str, OTopology],
         use_last_percent: int = 50,
@@ -168,20 +174,29 @@ class Worker:
         # run all simulation
         forcefield = set_custom_parms(self.forcefield, self.to_custom, input_array)
         forcefield.to_file("custom.offxml")
-        interchange_gas = Interchange.from_smirnoff(
-            force_field=forcefield, topology=self.topology["gas"]
-        )
+        interchange_gas = {
+            k: Interchange.from_smirnoff(force_field=forcefield, topology=t)
+            for k, t in self.topology["gas"].items()
+        }
 
-        interchange_condensed = Interchange.from_smirnoff(
-            force_field=forcefield, topology=self.topology["condensed"]
-        )
+        interchange_condensed = {
+            k: Interchange.from_smirnoff(force_field=forcefield, topology=t)
+            for k, t in self.topology["condensed"].items()
+        }
 
         simulations = [
-            (
-                create_serialized_system(interchange_gas, settings)
-                if settings.ensemble == Ensemble.NVT
-                else create_serialized_system(interchange_condensed, settings)
-            )
+            [
+                (
+                    create_serialized_system(
+                        interchange_gas[settings.system_id], settings
+                    )
+                    if settings.ensemble == Ensemble.NVT
+                    else create_serialized_system(
+                        interchange_condensed[settings.system_id], settings
+                    )
+                ),
+                settings,
+            ]
             for settings in simulation_settings
         ]
 
@@ -190,7 +205,7 @@ class Worker:
                 self.compute_methods[self.ray]["run"](
                     *simulation, settings, eq_time=self.eq_time
                 )
-                for simulation, settings in zip(simulations, simulation_settings)
+                for simulation, settings in simulations
             ]
 
             if self.ray:
@@ -213,32 +228,26 @@ class Worker:
             objt = 999
 
         else:
-            compute_workers = []
-            temperatures = defaultdict(list)
+            compute_workers = {}
+            training_systems = defaultdict(list)
             for settings in simulation_settings:
-                temp = settings.temperature.to("kelvin").magnitude
-                temperatures[temp].append(settings)
+                this_mol = settings.system_id
+                training_systems[this_mol].append(settings)
 
-            for k, v in temperatures.items():
+            for k, v in training_systems.items():
                 for s in v:
                     if s.ensemble.name == Ensemble.NVT.name:
                         gas_mdLog = read_openmm_output(
-                            openmm_output=os.path.join(
-                                iter_path, s.work_path, "simulation.csv"
-                            ),
+                            openmm_output=os.path.join(s.work_path, "simulation.csv"),
                             use_last_percent=self.use_last_percent,
                         )
                     elif s.ensemble.name == Ensemble.NPT.name:
                         liquid_mdLog = read_openmm_output(
-                            openmm_output=os.path.join(
-                                iter_path, s.work_path, "simulation.csv"
-                            ),
+                            openmm_output=os.path.join(s.work_path, "simulation.csv"),
                             use_last_percent=self.use_last_percent,
                         )
-                        system_file = os.path.join(iter_path, s.work_path, "system.xml")
-                        topology_file = os.path.join(
-                            iter_path, s.work_path, "output.pdb"
-                        )
+                        system_file = os.path.join(s.work_path, "system.xml")
+                        topology_file = os.path.join(s.work_path, "output.pdb")
                         trajectory_file = os.path.join(
                             iter_path, s.work_path, "trajectory.dcd"
                         )
@@ -251,33 +260,30 @@ class Worker:
                         potential_energy=Q_([0.0] * 10, "kcal/mol")
                     )
 
-                compute_workers.append(
-                    self.compute_methods[self.ray]["compute"](
-                        gas_mdLog=gas_mdLog,
-                        liquid_mdLog=liquid_mdLog,
-                        liquid_mdSettings=liquid_mdSettings,
-                        system_file=system_file,
-                        topology_file=topology_file,
-                        trajectory_file=trajectory_file,
-                        use_last_percent=self.use_last_percent,
-                        calc_hvap=True,
-                        MPID=True,
-                        n_block=self.n_block,
-                    )
+                compute_workers[this_mol] = self.compute_methods[self.ray]["compute"](
+                    gas_mdLog=gas_mdLog,
+                    liquid_mdLog=liquid_mdLog,
+                    liquid_mdSettings=liquid_mdSettings,
+                    system_file=system_file,
+                    topology_file=topology_file,
+                    trajectory_file=trajectory_file,
+                    use_last_percent=self.use_last_percent,
+                    calc_hvap=True,
+                    MPID=True,
+                    n_block=self.n_block,
                 )
 
             if self.ray:
-                results = ray.get(compute_workers)
+                results = {k: ray.get(v) for k, v in compute_worker.items()}
 
             else:
                 results = compute_workers
             objt = 0
             data = []
-            for result, ci in results:
-                temp = result.Temperature.magnitude
+            for sid, (result, ci) in results.items():
                 this_objective = Worker.objective(
                     calc_data=result,
-                    ref_data=self.reference_data[temp],
+                    ref_data=self.reference_data[sid],
                     new_params=input_array,
                     ini_params=self.ini_params,
                     penalty_priors=penalty_priors,
@@ -288,7 +294,6 @@ class Worker:
                     {k: v.magnitude for k, v in result.__dict__.items()}
                     | {
                         "CI": ci.magnitude,
-                        "Temperature": float(temp),
                         "objt": this_objective,
                     }
                 )

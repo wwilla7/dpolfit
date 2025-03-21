@@ -648,7 +648,7 @@ def block_average(data: np.ndarray, n_block: int = 20, axis: int = 0):
     # Reshape the data into blocks
 
     block_size = data.shape[axis] // n_block
-    logger.info(f"block size {block_size}.")
+    logger.debug(f"block size {block_size}.")
     used_data = data[-block_size * n_block :]
 
     shape = list(used_data.shape)
