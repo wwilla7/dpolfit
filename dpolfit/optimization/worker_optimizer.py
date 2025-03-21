@@ -2,10 +2,10 @@
 
 import logging
 import os
+import json
 from collections import defaultdict
 from sys import stdout
 from typing import Generator, Dict, List, Literal, Tuple, Union
-import pandas as pd
 import numpy as np
 import openmm.unit as omm_unit
 import ray
@@ -22,6 +22,7 @@ from dpolfit.optimization.utils import (
     get_custom_parms,
     read_openmm_output,
     set_custom_parms,
+    ureg,
     Q_,
 )
 import shutil
@@ -32,6 +33,7 @@ from openmm import Context, LangevinIntegrator, Platform, System, XmlSerializer
 from openmm.app import PDBFile
 from scipy.optimize import minimize
 from dpolfit.openmm.md import run
+from dataclasses import replace
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -57,7 +59,7 @@ class Worker:
                 True: {"run": run_remote.remote, "compute": compute_remote.remote},
                 False: {"run": run, "compute": compute},
             }
-
+            
         else:
             self.ray = False
             self.compute_methods = {False: {"run": run, "compute": compute}}
@@ -83,16 +85,20 @@ class Worker:
 
         objt = 0
 
+        logging.info("property objective:")
         for prop, value in calc_data.__dict__.items():
             if not np.isnan(value):
+                
                 if prop == "Density":
                     z = 0.005
                 else:
                     z = 0.025
-                    x = value.magnitude
-                    y = getattr(ref_data, prop).magnitude
-                    this_objt = abp(x, y, z) if abp(x, y, z) < 1 else 1
-                    objt += this_objt
+
+                x = value.magnitude
+                y = getattr(ref_data, prop).magnitude
+                this_objt = abp(x, y, z) if abp(x, y, z) < 1 else 1
+                objt += this_objt
+                logging.debug(prop, this_objt)
 
         if isinstance(penalty_priors, np.ndarray):
 
@@ -119,6 +125,7 @@ class Worker:
         forcefield: OForceField,
         topology: Dict[str, OTopology],
         use_last_percent: int = 50,
+        n_block: int = 1,
     ):
         self.simulation_settings = simulation_settings
         self.reference_data = reference_data
@@ -126,13 +133,15 @@ class Worker:
         self.to_custom, self.ini_params = get_custom_parms(self.forcefield)
         self.topology = topology
         self.use_last_percent = use_last_percent
+        self.n_block = n_block
 
     def worker(self, input_array, penalty_priors=None):
-        logging.debug(input_array)
         this_iteration = self.interation.iteration_number
         logging.info(f"Running iteration {this_iteration}")
         logging.info(input_array)
         iter_path = os.path.join(self.work_path, f"iter_{this_iteration:02d}")
+        simulation_settings = [replace(s, work_path=os.path.join(iter_path, s.work_path)) for s in self.simulation_settings]
+
         # TODO restart the optimization
         if os.path.exists(iter_path):
             run_md = False
@@ -160,13 +169,13 @@ class Worker:
                 if settings.ensemble == Ensemble.NVT
                 else create_serialized_system(interchange_condensed, settings)
             )
-            for settings in self.simulation_settings
+            for settings in simulation_settings
         ]
 
         if run_md:
             workers = [
                 self.compute_methods[self.ray]["run"](*simulation, settings)
-                for simulation, settings in zip(simulations, self.simulation_settings)
+                for simulation, settings in zip(simulations, simulation_settings)
             ]
 
             if self.ray:
@@ -181,7 +190,7 @@ class Worker:
                     == 0
                     else 0
                 )
-                for setting in self.simulation_settings
+                for setting in simulation_settings
             ]
         if "Failed" in workers:
             logging.info("Failed to run simulation with parameters")
@@ -191,7 +200,7 @@ class Worker:
         else:
             compute_workers = []
             temperatures = defaultdict(list)
-            for settings in self.simulation_settings:
+            for settings in simulation_settings:
                 temp = settings.temperature.to("kelvin").magnitude
                 temperatures[temp].append(settings)
 
@@ -218,7 +227,7 @@ class Worker:
                         trajectory_file = os.path.join(
                             iter_path, s.work_path, "trajectory.dcd"
                         )
-                        liquid_mdSettings = s
+                        liquid_mdSettings = s 
 
                 try:
                     gas_mdLog
@@ -238,6 +247,7 @@ class Worker:
                         use_last_percent=self.use_last_percent,
                         calc_hvap=True,
                         MPID=True,
+                        n_block=self.n_block,
                     )
                 )
 
@@ -262,8 +272,8 @@ class Worker:
                     {k: v.magnitude for k, v in result.__dict__.items()}
                     | {"CI": ci.magnitude, "Temperature": float(temp), "objt": this_objective}
                 )
-            dt = pd.DataFrame(data)
-            dt.to_csv("results.csv", index=False)
+            with open("results.json", "w")as f:
+                json.dump(data, f, indent=2) 
 
         self.interation = IterationRecord(
             iteration_number=this_iteration + 1, loss_function=objt
@@ -284,7 +294,7 @@ class Worker:
             args=(penalty_priors),
             method=opt_method,
             bounds=bounds,
-            options={"maxiter": 25},
+            options={"maxiter": 50},
         )
 
         return res

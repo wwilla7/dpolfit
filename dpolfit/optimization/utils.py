@@ -15,6 +15,7 @@ from openmm import (
     System,
     Force,
     MonteCarloBarostat,
+    AmoebaMultipoleForce,
 )
 from openmm.app import PDBFile
 import openmm.unit as omm_unit
@@ -43,10 +44,11 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 
-ureg.define("alpha_unit = 1e-4/kelvin")
-ureg.define("kappa_unit = 1e-6/bar")
 
 DEBUG = 0
+
+ureg.define("alpha_unit = 1e-4/kelvin")
+ureg.define("kappa_unit = 1e-6/bar")
 
 
 class Ensemble(Enum):
@@ -274,18 +276,16 @@ def compute_hvap_alpha_kappa(
     if isinstance(n_block, str):
         n_block = 20
 
-    box_volume = liquid_mdLog.box_volume.to("nm**3")
-    # box_volume_mean = box_volume.mean()
+    box_volume = Q_(liquid_mdLog.box_volume.to("nm**3").magnitude, "nm**3")
     box_volume_mean = block_average(box_volume, n_block).overall_average
-    temperature = liquid_mdSettings.temperature.to("kelvin")
+    temperature = Q_(liquid_mdSettings.temperature.to("kelvin").magnitude, "kelvin")
+    pressure = Q_(liquid_mdSettings.pressure.to("bar").magnitude, "bar")
     # H = E + PV
     PV_liquid = (
-        liquid_mdSettings.pressure.to("bar")
-        * box_volume
-        / (liquid_mdSettings.n_molecules / na.to_base_units())
+        pressure * box_volume / (liquid_mdSettings.n_molecules / na.to_base_units())
     )
 
-    H_liquid = liquid_mdLog.potential_energy.to("kJ/mol") + PV_liquid
+    H_liquid = Q_(liquid_mdLog.potential_energy.to("kJ/mol").magnitude, "kJ/mol") + PV_liquid
     H_liquid_mean = block_average(H_liquid, n_block).overall_average
 
     kbT = kb_u * temperature
@@ -294,7 +294,7 @@ def compute_hvap_alpha_kappa(
 
         hvap = (
             block_average(
-                gas_mdLog.potential_energy.to("kJ/mol"), n_block
+                Q_(gas_mdLog.potential_energy.to("kJ/mol").magnitude, "kJ/mol"), n_block
             ).overall_average
             # gas_mdLog.potential_energy.to("kJ/mol").mean(axis=0)
             + kbT
@@ -336,10 +336,17 @@ def compute_hvap_alpha_kappa(
 def _getChargesPolarizabilities(force, n_particles) -> Tuple[np.ndarray, np.ndarray]:
     chargs = np.zeros(n_particles)
     polarizabilities = np.zeros(n_particles)
-    for p in range(n_particles):
-        parms = force.getMultipoleParameters(p)
-        chargs[p] = parms[0]
-        polarizabilities[p] = parms[-1][0]
+    if force.__class__.__name__ == "AmoebaMultipoleForce":
+        for p in range(n_particles):
+            parms = force.getMultipoleParameters(p)
+            chargs[p] = parms[0] / omm_unit.elementary_charge
+            polarizabilities[p] = parms[-1] / (omm_unit.nanometer**3)  # [0]
+
+    else:
+        for p in range(n_particles):
+            parms = force.getMultipoleParameters(p)
+            chargs[p] = parms[0]
+            polarizabilities[p] = parms[-1][0]
 
     return chargs, polarizabilities
 
@@ -420,13 +427,16 @@ def compute_DielectricProperties(
 ):
     context = create_context(system=system, temperature=temperature)
     n_particles = system.getNumParticles()
+    forces = {f.__class__.__name__: f for f in system.getForces()}
     if MPID:
         import mpidplugin
         from mpidplugin import MPIDForce
 
-        for force in system.getForces():
-            if MPIDForce.isinstance(force):
-                mpidforce = MPIDForce.cast(force)
+        if "AmoebaMultipoleForce" in forces.keys():
+            mpidforce = forces["AmoebaMultipoleForce"]
+        else:
+            if MPIDForce.isinstance(forces["Force"]):
+                mpidforce = MPIDForce.cast(forces["Force"])
 
     else:
         from openmm import NonbondedForce
@@ -463,6 +473,8 @@ def compute_DielectricProperties(
 
     if isinstance(n_block, str):
         n_block = round(n_frames / 25)
+        logger.info("number of blocks:")
+        logger.info(n_block)
         if n_block == 0:
             n_block = 1
 
@@ -483,7 +495,6 @@ def compute_DielectricProperties(
             induced_dipoles[f] = np.array(mpidforce.getInducedDipoles(context))
 
         charges, polarizabilities = _getChargesPolarizabilities(mpidforce, n_particles)
-        # dipole_moments = _getPermanetDipoles(traj.xyz, charges).to("e*a0").magnitude
         sum_alphas = Q_(np.sum(polarizabilities), "nm**3").to("a0**3")
         prefactor2 = 1 / vacuum_permittivity
         high_frequency_dielectric = prefactor2 * (1 / avg_volumes) * sum_alphas + 1
@@ -532,7 +543,6 @@ def compute_DielectricProperties(
     dielectric_constant = dielectric + high_frequency_dielectric
 
     dielectric_constant_block = block_average(dielectric_constant, n_block)
-    logging.info(temperature)
     logging.info("95% Confidence Interval of dielectric constant:")
     logging.info(dielectric_constant_block.overall_average)
     logging.info(dielectric_constant_block.confidence_interval)
@@ -586,6 +596,7 @@ def compute(
     p1 = compute_hvap_alpha_kappa(
         gas_mdLog, liquid_mdLog, liquid_mdSettings, calc_hvap=True, n_block=n_block
     )
+
     p2, epsilon_ci = compute_DielectricProperties(
         system=system,
         topology_file=topology_file,
