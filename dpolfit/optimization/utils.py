@@ -38,13 +38,6 @@ from sys import stdout
 import logging
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(
-    stream=stdout,
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
-
-
 DEBUG = 0
 
 ureg.define("alpha_unit = 1e-4/kelvin")
@@ -180,7 +173,7 @@ def create_simulation(
     )
     integrator = LangevinIntegrator(temperature, 1.0 / omm_unit.picosecond, time_step)
     if simulation_settings.ensemble.name == Ensemble.NPT.name:
-        logging.info("Adding a MC Barostat")
+        logger.info("Adding a MC Barostat")
         pressure = simulation_settings.pressure.to("bar").magnitude * omm_unit.bar
         barostat = MonteCarloBarostat(pressure, temperature, 25)
         additional_forces.append(barostat)
@@ -285,7 +278,9 @@ def compute_hvap_alpha_kappa(
         pressure * box_volume / (liquid_mdSettings.n_molecules / na.to_base_units())
     )
 
-    H_liquid = Q_(liquid_mdLog.potential_energy.to("kJ/mol").magnitude, "kJ/mol") + PV_liquid
+    H_liquid = (
+        Q_(liquid_mdLog.potential_energy.to("kJ/mol").magnitude, "kJ/mol") + PV_liquid
+    )
     H_liquid_mean = block_average(H_liquid, n_block).overall_average
 
     kbT = kb_u * temperature
@@ -543,9 +538,9 @@ def compute_DielectricProperties(
     dielectric_constant = dielectric + high_frequency_dielectric
 
     dielectric_constant_block = block_average(dielectric_constant, n_block)
-    logging.info("95% Confidence Interval of dielectric constant:")
-    logging.info(dielectric_constant_block.overall_average)
-    logging.info(dielectric_constant_block.confidence_interval)
+    logger.info("95% Confidence Interval of dielectric constant:")
+    logger.info(dielectric_constant_block.overall_average)
+    logger.info(dielectric_constant_block.confidence_interval)
 
     # Residue Dipole
     pdb = PDBFile(topology_file)
@@ -653,7 +648,7 @@ def block_average(data: np.ndarray, n_block: int = 20, axis: int = 0):
     # Reshape the data into blocks
 
     block_size = data.shape[axis] // n_block
-    logging.debug(f"block size {block_size}.")
+    logger.info(f"block size {block_size}.")
     used_data = data[-block_size * n_block :]
 
     shape = list(used_data.shape)

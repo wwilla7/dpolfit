@@ -36,11 +36,6 @@ from dpolfit.openmm.md import run
 from dataclasses import replace
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(
-    stream=stdout,
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
 
 
 class Worker:
@@ -59,7 +54,7 @@ class Worker:
                 True: {"run": run_remote.remote, "compute": compute_remote.remote},
                 False: {"run": run, "compute": compute},
             }
-            
+
         else:
             self.ray = False
             self.compute_methods = {False: {"run": run, "compute": compute}}
@@ -72,33 +67,43 @@ class Worker:
         new_params: np.ndarray,
         ini_params: np.ndarray,
         penalty_priors: Union[np.ndarray, None] = None,
+        weights: Union[Dict, None] = None,
     ):
         nparam = len(new_params)
 
-        # Same tolerance as OPC3
-        # tol = 0.005 for density
-        # tol = 0.025 for others
-
-        # absolute errors
-        # offset 10
-        abp = lambda x, y, z: abs(x - y) / (y * z) / 10
+        abp = lambda x, y, z: z * abs((x - y) / y)
+        # abp = lambda x, y, z: abs(x - y) / (y * z) / 10
 
         objt = 0
+        evaluated_properties = [
+            k
+            for k, v in ref_data.__dict__.items()
+            if not np.isnan(v) and k not in ["Temperature", "SimulationTime"]
+        ]
+        n_prop = len(evaluated_properties)
 
-        logging.info("property objective:")
-        for prop, value in calc_data.__dict__.items():
+        default_weights = {prop: 1 / n_prop for prop in evaluated_properties}
+        # TODO give more spefic weights for the last two conditions
+        if weights is None:
+            weights = default_weights
+        elif len(weights.keys()) != n_prop:
+            weights = default_weights
+        elif np.sum(weights.values()) != 1:
+            weights = default_weights
+
+        logger.info(weights)
+        logger.info("property objective:")
+        for prop in evaluated_properties:
+            value = getattr(calc_data, prop)
             if not np.isnan(value):
-                
-                if prop == "Density":
-                    z = 0.005
-                else:
-                    z = 0.025
 
                 x = value.magnitude
                 y = getattr(ref_data, prop).magnitude
-                this_objt = abp(x, y, z) if abp(x, y, z) < 1 else 1
+                z = weights[prop]
+                this_objt = abp(x, y, z)
                 objt += this_objt
-                logging.debug(prop, this_objt)
+                logger.info(prop)
+                logger.info(this_objt)
 
         if isinstance(penalty_priors, np.ndarray):
 
@@ -106,14 +111,17 @@ class Worker:
             # Gaussian prior distribution to prevent
             # big deviation from the original values
 
-            p = (
-                lambda x, y: np.square(
-                    (new_params[x] - ini_params[x]) / penalty_priors[x]
-                )
-                * y
-            )
+            # p = (
+            #     lambda x, y: np.square(
+            #         (new_params[x] - ini_params[x]) / penalty_priors[x]
+            #     )
+            #     * y
+            # )
+            p = lambda x: penalty_priors[x] * np.square(new_params[x] - ini_params[x])
 
-            parameter_penalty = np.sum([p(i, objt) for i in range(nparam)])
+            parameter_penalty = np.sum([p(i) for i in range(nparam)])
+            logger.info("penalty objective")
+            logger.info(parameter_penalty)
             objt += parameter_penalty
 
         return objt
@@ -126,6 +134,7 @@ class Worker:
         topology: Dict[str, OTopology],
         use_last_percent: int = 50,
         n_block: int = 1,
+        eq_time: float = 1.0,
     ):
         self.simulation_settings = simulation_settings
         self.reference_data = reference_data
@@ -134,13 +143,17 @@ class Worker:
         self.topology = topology
         self.use_last_percent = use_last_percent
         self.n_block = n_block
+        self.eq_time = eq_time
 
-    def worker(self, input_array, penalty_priors=None):
+    def worker(self, input_array, penalty_priors=None, weights=None):
         this_iteration = self.interation.iteration_number
-        logging.info(f"Running iteration {this_iteration}")
-        logging.info(input_array)
+        logger.info(f"Running iteration {this_iteration}")
+        logger.info(input_array)
         iter_path = os.path.join(self.work_path, f"iter_{this_iteration:02d}")
-        simulation_settings = [replace(s, work_path=os.path.join(iter_path, s.work_path)) for s in self.simulation_settings]
+        simulation_settings = [
+            replace(s, work_path=os.path.join(iter_path, s.work_path))
+            for s in self.simulation_settings
+        ]
 
         # TODO restart the optimization
         if os.path.exists(iter_path):
@@ -174,7 +187,9 @@ class Worker:
 
         if run_md:
             workers = [
-                self.compute_methods[self.ray]["run"](*simulation, settings)
+                self.compute_methods[self.ray]["run"](
+                    *simulation, settings, eq_time=self.eq_time
+                )
                 for simulation, settings in zip(simulations, simulation_settings)
             ]
 
@@ -182,7 +197,7 @@ class Worker:
                 workers = ray.get(workers)
 
         else:
-            logging.info(f"using existing MD run in {iter_path}")
+            logger.info(f"using existing MD run in {iter_path}")
             workers = [
                 (
                     "Failed"
@@ -193,8 +208,8 @@ class Worker:
                 for setting in simulation_settings
             ]
         if "Failed" in workers:
-            logging.info("Failed to run simulation with parameters")
-            logging.info(input_array)
+            logger.info("Failed to run simulation with parameters")
+            logger.info(input_array)
             objt = 999
 
         else:
@@ -227,7 +242,7 @@ class Worker:
                         trajectory_file = os.path.join(
                             iter_path, s.work_path, "trajectory.dcd"
                         )
-                        liquid_mdSettings = s 
+                        liquid_mdSettings = s
 
                 try:
                     gas_mdLog
@@ -266,19 +281,24 @@ class Worker:
                     new_params=input_array,
                     ini_params=self.ini_params,
                     penalty_priors=penalty_priors,
+                    weights=weights,
                 )
                 objt += this_objective
                 data.append(
                     {k: v.magnitude for k, v in result.__dict__.items()}
-                    | {"CI": ci.magnitude, "Temperature": float(temp), "objt": this_objective}
+                    | {
+                        "CI": ci.magnitude,
+                        "Temperature": float(temp),
+                        "objt": this_objective,
+                    }
                 )
-            with open("results.json", "w")as f:
-                json.dump(data, f, indent=2) 
+            with open("results.json", "w") as f:
+                json.dump(data, f, indent=2)
 
         self.interation = IterationRecord(
             iteration_number=this_iteration + 1, loss_function=objt
         )
-        logging.info(f"iteration: {this_iteration}, loss_function: {objt:.5f}")
+        logger.info(f"iteration: {this_iteration}, loss_function: {objt:.5f}")
 
         return objt
 
@@ -287,11 +307,12 @@ class Worker:
         opt_method: str = "Nelder-Mead",
         bounds: Union[np.ndarray, None] = None,
         penalty_priors: Union[np.ndarray, None] = None,
+        weights: Union[Dict, None] = None,
     ):
         res = minimize(
             self.worker,
             x0=self.ini_params,
-            args=(penalty_priors),
+            args=(penalty_priors, weights),
             method=opt_method,
             bounds=bounds,
             options={"maxiter": 50},

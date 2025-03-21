@@ -23,6 +23,7 @@ from openmm.app import (
     StateDataReporter,
 )
 from dpolfit.optimization.utils import SimulationSettings, Ensemble
+
 try:
     import mpidplugin
 except ImportError as e:
@@ -31,11 +32,6 @@ from sys import stdout
 import logging
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(
-    stream=stdout,
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
 
 
 @dataclass(config=dict(validate_assignment=True))
@@ -156,8 +152,13 @@ def _run(input_data: InputData):
     return simulation
 
 
-def run(system_serialized: str, pdb_str: str, simulation_settings: SimulationSettings, eq_time=1):
-    logging.info(f"Running simulation {simulation_settings.ensemble.name}")
+def run(
+    system_serialized: str,
+    pdb_str: str,
+    simulation_settings: SimulationSettings,
+    eq_time=1,
+):
+    logger.info(f"Running simulation {simulation_settings.ensemble.name}")
     cwd = os.getcwd()
     work_path = simulation_settings.work_path
     os.makedirs(work_path, exist_ok=True)
@@ -201,7 +202,7 @@ def run(system_serialized: str, pdb_str: str, simulation_settings: SimulationSet
     # simulation.context.setVelocitiesToTemperature(temperature)
 
     equ_nsteps = round(eq_time * unit.nanosecond / (timestep * unit.femtosecond))
-    
+
     nsteps = simulation_settings.total_steps
     save_nsteps = round(10 * unit.picosecond / (timestep * unit.femtosecond))
 
