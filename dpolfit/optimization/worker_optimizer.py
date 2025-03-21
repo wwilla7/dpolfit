@@ -260,7 +260,7 @@ class Worker:
                         potential_energy=Q_([0.0] * 10, "kcal/mol")
                     )
 
-                compute_workers[this_mol] = self.compute_methods[self.ray]["compute"](
+                compute_workers[k] = self.compute_methods[self.ray]["compute"](
                     gas_mdLog=gas_mdLog,
                     liquid_mdLog=liquid_mdLog,
                     liquid_mdSettings=liquid_mdSettings,
@@ -274,7 +274,7 @@ class Worker:
                 )
 
             if self.ray:
-                results = {k: ray.get(v) for k, v in compute_worker.items()}
+                results = {k: ray.get(v) for k, v in compute_workers.items()}
 
             else:
                 results = compute_workers
