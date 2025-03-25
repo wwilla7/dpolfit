@@ -496,7 +496,7 @@ def compute_DielectricProperties(
 
     else:
         dipole_moments = _getPermanetDipoles(traj.xyz, charges).to("e*a0").magnitude
-        high_frequency_dielectric = 1
+        high_frequency_dielectric = Q_(1, "")
         polarizabilities = np.zeros(n_particles)
 
     ### fluctuation of dipole moments

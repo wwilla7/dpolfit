@@ -141,6 +141,7 @@ class Worker:
         use_last_percent: int = 50,
         n_block: int = 1,
         eq_time: float = 1.0,
+        MPID: bool = True,
     ):
         self.simulation_settings = simulation_settings
         self.reference_data = reference_data
@@ -150,6 +151,7 @@ class Worker:
         self.use_last_percent = use_last_percent
         self.n_block = n_block
         self.eq_time = eq_time
+        self.mpid = MPID
 
     def worker(self, input_array, penalty_priors=None, weights=None):
         this_iteration = self.interation.iteration_number
@@ -269,7 +271,7 @@ class Worker:
                     trajectory_file=trajectory_file,
                     use_last_percent=self.use_last_percent,
                     calc_hvap=True,
-                    MPID=True,
+                    MPID=self.mpid,
                     n_block=self.n_block,
                 )
 
@@ -295,6 +297,7 @@ class Worker:
                     | {
                         "CI": ci.magnitude,
                         "objt": this_objective,
+                        "system_id": sid,
                     }
                 )
             with open("results.json", "w") as f:
@@ -320,7 +323,7 @@ class Worker:
             args=(penalty_priors, weights),
             method=opt_method,
             bounds=bounds,
-            options={"maxiter": 50},
+            # options={"maxiter": 50},
         )
 
         return res
