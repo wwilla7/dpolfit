@@ -46,7 +46,7 @@ class OptimizationSettings(SimulationSettings):
 
 class Worker:
     def __init__(self, work_path: str, ngpus: int = 1):
-        self.interation: IterationRecord = IterationRecord(
+        self.iteration: IterationRecord = IterationRecord(
             iteration_number=1, loss_function=999
         )
         self.work_path = work_path
@@ -154,7 +154,7 @@ class Worker:
         self.mpid = MPID
 
     def worker(self, input_array, penalty_priors=None, weights=None):
-        this_iteration = self.interation.iteration_number
+        this_iteration = self.iteration.iteration_number
         logger.info(f"Running iteration {this_iteration}")
         logger.info(input_array)
         iter_path = os.path.join(self.work_path, f"iter_{this_iteration:02d}")
@@ -303,7 +303,7 @@ class Worker:
             with open("results.json", "w") as f:
                 json.dump(data, f, indent=2)
 
-        self.interation = IterationRecord(
+        self.iteration = IterationRecord(
             iteration_number=this_iteration + 1, loss_function=objt
         )
         logger.info(f"iteration: {this_iteration}, loss_function: {objt:.5f}")
