@@ -1,167 +1,263 @@
 #!/usr/bin/env python
 
-import copy
-import json
+"""
+Fit polarizability parameters to ESP data
+"""
+
 import os
 from collections import defaultdict
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
-
-from dpolfit.utilities.constants import a03_to_angstrom3, a03_to_nm3
-
-# https://github.com/numpy/numpy/issues/20895
-np.finfo(np.dtype("float32"))
-np.finfo(np.dtype("float64"))
-
-from datetime import datetime
-
+import pandas as pd
 import pint
-from openeye import oechem
-from openeye.oechem import OEField, Types
-from scipy.optimize import nnls
 from scipy.spatial.distance import cdist
-from tqdm import tqdm
-
-from dpolfit.utilities.miscellaneous import *
 
 ureg = pint.UnitRegistry()
 Q_ = ureg.Quantity
+import logging
+
+from openff.toolkit import ForceField, Molecule, Topology
+from openff.units import unit
+
+logging.basicConfig(
+    format="%(asctime)s %(levelname)s: %(message)s",
+    datefmt="%m/%d/%Y %I:%M:%S %p",
+    level=logging.INFO,
+)
+logger = logging.getLogger()
 
 
-def label_alpha(oemol: oechem.OEMol, smarts_pattern: str, index: bool = True) -> list:
+@dataclass
+class AMol:
     """
-    Lable polarizability parameters on the molecule
-
-    :param oemol: openeye molecule object
-    :type oemol: OEMol
-    :param smarts_pattern: the smarts pattern used to match the molecule
-    :type smarts_pattern: string
-    :return: return matched SMARTs patterns
-    :rtype: list
+    A molecule with ESP data
     """
-    ss = oechem.OESubSearch(smarts_pattern)
-    oechem.OEPrepareSearch(oemol, ss)
 
-    ret = []
-    for match in ss.Match(oemol):
-        # Only need the first atom, not the entire pattern
-        if index:
-            ret.append([ma.target.GetIdx() for ma in match.GetAtoms()][0])
-        else:
-            ret.append([ma.target for ma in match.GetAtoms()][0])
+    data_path: str
+    off_ff: ForceField
+    pol_handler: str = "MPIDPolarizability"
 
-    return ret
+    @property
+    def mapped_smiles(self) -> str:
+        """
+        Returns the mapped smiles string of the molecule
+        """
+
+        with open(os.path.join(self.data_path, "molecule.smi"), "r") as f:
+            smi = f.read()
+        return smi
+
+    @property
+    def coordinates(self) -> np.ndarray:
+        """
+        Returns the coordinates of the molecule
+        Units: bohr
+        """
+
+        crds = (
+            Q_(
+                np.load(os.path.join(self.data_path, "coordinates.npy")),
+                ureg.angstrom,
+            )
+            .to(ureg.bohr)
+            .magnitude
+        )
+        return crds
+
+    @property
+    def grid(self) -> np.ndarray:
+        """
+        Returns the grid points
+        Units: bohr
+        """
+
+        grid = (
+            Q_(np.load(os.path.join(self.data_path, "grid.npy")), ureg.angstrom)
+            .to(ureg.bohr)
+            .magnitude
+        )
+
+        return grid
+
+    @property
+    def data_esp(self) -> Dict[str, Dict[str, np.ndarray]]:
+        """
+        Returns all ESP data for polarizability fitting
+        Units: e / bohr
+        """
+
+        data = {}
+
+        grid_espi_0 = Q_(
+            np.load(os.path.join(self.data_path, "grid_esp.0.npy")),
+            ureg.elementary_charge / ureg.bohr,
+        ).magnitude
+
+        data["0"] = grid_espi_0
+
+        perturb_dipoles = {
+            "x+": [0.01, 0.0, 0.0],
+            "x-": [-0.01, 0.0, 0.0],
+            "y+": [0.0, 0.01, 0.0],
+            "y-": [0.0, -0.01, 0.0],
+            "z+": [0.0, 0.0, 0.01],
+            "z-": [0.0, 0.0, -0.01],
+        }
+
+        for d, e in perturb_dipoles.items():
+            grid_espi = Q_(
+                np.load(os.path.join(self.data_path, f"grid_esp.{d}.npy")),
+                ureg.elementary_charge / ureg.bohr,
+            ).magnitude
+            vdiffi = grid_espi - grid_espi_0
+            data[d] = {"vdiff": vdiffi, "efield": e}
+
+        return data
+
+    @property
+    def polarizability_smirks(self) -> List[str]:
+        """
+        Returns the SMARTS patterns of the polarizability parameters
+        """
+        mol = Molecule.from_mapped_smiles(self.mapped_smiles)
+        parameters = self.off_ff.label_molecules(mol.to_topology())[0]
+        smirks = [v._smirks for _, v in parameters[self.pol_handler].items()]
+        logger.info(f"smiles: {mol.to_smiles(explicit_hydrogens=False)}")
+        return smirks
 
 
-def train(oedatabase: oechem.OEMolRecord, parameter_types: list) -> dict:
+def quality_of_fit(mol: AMol) -> Dict[str, float]:
     """
-    The main function to train polarizability against generated QM ESPs
-
-    :param oedatabase: The OE database object that contains all training data
-    :type oedatabase: .oedb
-    :param parameter_types: The polarizability typing scheme
-    :type parameter_types: List
-    :return: return derived polarizabilities and optimization details
-    :rtype: dict
+    Returns a dictionary of the
+    quality of fit (RRMS) of the polarizability parameters
     """
-    ndim = len(parameter_types)
-    positions = {parm: idx for idx, parm in enumerate(parameter_types)}
-    param_count = {parm: 0 for parm in parameter_types}
-    parameter_copy = copy.copy(parameter_types)
+
+    crds = mol.coordinates
+    grid = mol.grid
+
+    r_ij = -(grid - crds[:, None])
+    r_ij3 = np.power(cdist(crds, grid, metric="euclidean"), -3)
+
+    offmol = Molecule.from_mapped_smiles(mol.mapped_smiles)
+    parameters = mol.off_ff.label_molecules(offmol.to_topology())[0]
+    alphas = np.array(
+        [
+            Q_(v.epsilon.magnitude, "angstrom**3").to("a0**3").magnitude
+            # v.polarizabilityXX.to("a0**3").magnitude
+            for _, v in parameters[mol.pol_handler].items()
+        ]
+    )
+
+    data_rrms = {}
+
+    for k, v in mol.data_esp.items():
+        if k == "0":
+            continue
+
+        vdiff = v["vdiff"]
+        efield = v["efield"]
+
+        D_ijE = np.dot(r_ij, efield) * r_ij3
+
+        esps = np.einsum("ji,j->i", D_ijE, alphas).reshape(-1, 1)
+
+        rrms = np.sqrt(
+            np.sum(np.square(vdiff - esps)) / np.sum(np.square(vdiff)) / len(vdiff)
+        )
+
+        data_rrms[k] = rrms
+
+    return data_rrms
+
+
+def fit(mol: AMol, ndim: int, positions: Dict[str, int]):
+    crds = mol.coordinates
+    grid = mol.grid
+
+    r_ij = -(grid - crds[:, None])
+    r_ij3 = np.power(cdist(crds, grid, metric="euclidean"), -3)
+
+    r_jk = crds - crds[:, None]
+    r_jk1 = cdist(crds, crds, metric="euclidean")
+    r_jk3 = np.power(r_jk1, -3, where=r_jk1 != 0)
 
     A = np.zeros((ndim, ndim))
     B = np.zeros(ndim)
 
-    ifs = oechem.oeifstream(oedatabase)
+    param_dict = defaultdict(list)
+    for idx, smirks in enumerate(mol.polarizability_smirks):
+        param_dict[smirks].append(idx)
 
-    dataset = []
-    for oerecord in tqdm(list(oechem.read_mol_records(ifs)), desc="Fitting progress"):
-        oemol = oerecord.get_mol()
-        oesmi = oechem.OEMolToSmiles(oemol)
-        dataset.append(oesmi)
+    for d, v in mol.data_esp.items():
+        if d == "0":
+            continue
 
-        param_dict = defaultdict(list)
-        included = []
-        for idx, parm in enumerate(parameter_types):
-            labelled = label_alpha(oemol=oemol, smarts_pattern=parm)
+        logger.debug(f"Processing {d}...")
 
-            if len(labelled) > 0:
-                for atom in labelled:
-                    if atom in included:
-                        pass
-                    else:
-                        param_dict[parm].append(atom)
-                        param_count[parm] += 1
-                        included.append(atom)
+        vdiff = v["vdiff"]
+        efield = v["efield"]
 
-        for conf in oemol.GetConfs():
-            conf_record = oerecord.get_conf_record(conf)
+        D_ijE = np.dot(r_ij, efield) * r_ij3
 
-            geometry_angstrom = json.loads(
-                conf_record.get_value(OEField("geometry_angstrom", Types.String))
-            )
+        for k, (smirks_k, alphas_k) in enumerate(param_dict.items()):
+            logger.debug(f"Processing {smirks_k}...")
 
-            geometry_bohr = Q_(geometry_angstrom, ureg.angstrom).to(ureg.bohr).magnitude
+            Cik = D_ijE[alphas_k].sum(axis=0)
+            B[positions[smirks_k]] += np.dot(Cik, vdiff).item()
 
-            grid_angstrom = json.loads(
-                conf_record.get_value(OEField("grid_angstrom", Types.String))
-            )
+            for l, (smirks_l, alphas_l) in enumerate(param_dict.items()):
+                if k > l:
+                    continue
+                Cil = D_ijE[alphas_l].sum(axis=0)
+                A[positions[smirks_k], positions[smirks_l]] += np.dot(Cil, Cik)
 
-            grid_bohr = Q_(grid_angstrom, ureg.angstrom).to(ureg.bohr).magnitude
+    A += A.T - np.diag(A.diagonal())
 
-            grid_esp_0 = json.loads(
-                conf_record.get_value(OEField("grid_esp_0_au_field", Types.String))
-            )
+    return A, B
 
-            r_ij = -(grid_bohr - geometry_bohr[:, None])
-            r_ij3 = np.power(cdist(geometry_bohr, grid_bohr, metric="euclidean"), -3)
 
-            r_jk = geometry_bohr - geometry_bohr[:, None]
-            r_jk1 = cdist(geometry_bohr, geometry_bohr, metric="euclidean")
-            r_jk3 = np.power(r_jk1, -3, where=r_jk1 != 0)
+if __name__ == "__main__":
+    from glob import glob
 
-            this_A = np.zeros((ndim, ndim))
+    # from mpid_plugin.nonbonded import MPIDCollection, MPIDPolarizabilityHandler
 
-            for d, ef in perturb_dipoles.items():
-                grid_esp_i = json.loads(
-                    conf_record.get_value(
-                        OEField(f"grid_esp_{d}_au_field", Types.String)
-                    )
-                )
+    a03_to_ang3 = Q_(1, "bohr**3").to("angstrom**3").magnitude
 
-                vdiff = np.array(grid_esp_i) - np.array(grid_esp_0)
+    cwd = os.getcwd()
+    data_path = os.path.join(cwd, "data")
+    ff = ForceField(os.path.join(cwd, "input.offxml"))  # , load_plugins=True)
+    pol_handler = "vdW"
+    # pol_handler = "MPIDPolarizability"
 
-                D_ijE = np.dot(r_ij, ef) * r_ij3
+    parameters = ff.get_parameter_handler(pol_handler).parameters
+    param_positions = {p._smirks: i for i, p in enumerate(parameters)}
 
-                for k, (smirks_k, alphas_k) in enumerate(param_dict.items()):
-                    Cik = D_ijE[alphas_k].sum(axis=0)
-                    B[positions[smirks_k]] += np.dot(Cik, vdiff).item()
+    ndim = len(parameters)
+    A = np.zeros((ndim, ndim))
+    B = np.zeros(ndim)
 
-                    for l, (smirks_l, alphas_l) in enumerate(param_dict.items()):
-                        if k > l:
-                            continue
-                        Cil = D_ijE[alphas_l].sum(axis=0)
-                        this_A[positions[smirks_k], positions[smirks_l]] += np.dot(
-                            Cil, Cik
-                        )
+    molecules = glob(os.path.join(data_path, "molecule*"))
+    nmol = len(molecules)
+    for idx, mol in enumerate(molecules):
+        logger.info(f"Fitting molecule {idx+1}/{nmol}")
+        confs = glob(os.path.join(mol, "conf*"))
+        amols = [AMol(conf, ff, pol_handler) for conf in confs]
+        ret = [fit(amol, ndim, param_positions) for amol in amols]
 
-            this_A += this_A.T - np.diag(this_A.diagonal())
-
-            A += this_A
+        A += sum([r[0] for r in ret])
+        B += sum([r[1] for r in ret])
 
     if np.where(B == 0)[0].size > 0:
         not_fitted = np.where(B == 0)[0]
 
         for i in sorted(not_fitted, reverse=True):
-            nft = parameter_types.pop(i)
+            nft = parameters.pop(i)
+            logger.info(f"Parameter {nft._smirks} not fitted")
 
-        fitted_positions = [positions[p] for p in parameter_types]
-
-        print(
-            f"{len(not_fitted)} not fitted parameters:",
-            *[parameter_copy[p] for p in not_fitted],
-            sep="\n",
-        )
+        fitted_smirks = [p._smirks for p in parameters]
+        fitted_positions = [param_positions[p] for p in fitted_smirks]
 
         A = A[tuple(np.meshgrid(fitted_positions, fitted_positions))]
         B = B[fitted_positions]
@@ -169,18 +265,30 @@ def train(oedatabase: oechem.OEMolRecord, parameter_types: list) -> dict:
     else:
         pass
 
-    # ret, _ = nnls(A, B)
+    np.save(os.path.join(cwd, "A.npy"), A)
+    np.save(os.path.join(cwd, "B.npy"), B)
+
+    logger.debug(f"A: {A}")
+    logger.debug(f"B: {B}")
+
     ret = np.linalg.solve(A, B)
 
-    # dt_json = {"parameters": {p: v for p, v in zip(parameter_types, ret)}} | {
-    dt_json = {
-        "parameters": {p: v * a03_to_nm3 for p, v in zip(parameter_types, ret)}
-    } | {
-        # "_unit": "bohr**3",
-        "_unit": "nm**3",
-        "_generated": datetime.now().strftime("%m-%d-%Y %H:%M:%S"),
-        "_dataset": dataset,
-        "design_matrix_count": param_count,
-    }
+    for p, v in zip(parameters, ret):
+        pol = v * a03_to_ang3
+        p.epsilon = pol * unit.kilocalorie_per_mole
+        p.id = f"polarizability = {pol:.5f} * angstrom**3"
 
-    return dt_json
+    logger.info(f"Saving polarzabilities in the parameter field of `id`.")
+    ff.to_file(os.path.join(cwd, "output.offxml"))
+
+    ## check rrms
+
+    all_rrms = []
+
+    for idx, mol in enumerate(molecules):
+        confs = glob(os.path.join(mol, "conf*"))
+        amols = [AMol(conf, ff, pol_handler) for conf in confs]
+        rrms_this_mol = [quality_of_fit(mol=amol) for amol in amols]
+        all_rrms.extend([list(r.values()) for r in rrms_this_mol])
+
+    logger.info(f"RRMS: {np.mean(all_rrms):.5f}")
