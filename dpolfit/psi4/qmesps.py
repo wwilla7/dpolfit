@@ -9,6 +9,7 @@ import numpy as np
 import psi4
 import ray
 from numpyencoder import NumpyEncoder
+
 # from openeye import oechem, oeomega
 from openff.recharge.esp import ESPSettings
 from openff.recharge.esp.psi4 import Psi4ESPGenerator
@@ -19,8 +20,8 @@ from openff.units import unit
 from dpolfit.utilities.miscellaneous import *
 
 
-@ray.remote(num_cpus=8)
-def psi4_optimizer(wd: str) -> float:
+# @ray.remote(num_cpus=8)
+def psi4_optimizer(wd: str) -> np.array:
     """
     Optimize geometry before QM ESPs calcs
 
@@ -48,7 +49,23 @@ def psi4_optimizer(wd: str) -> float:
 
     psi4mol.save_xyz_file("optimized.xyz", 1)
 
-    return ene
+    return psi4mol.geometry().to_array()
+
+
+def psi4_dipole(mol_xyz: str) -> float:
+    psi4.core.be_quiet()
+    psi4.set_num_threads(8)
+    psi4mol = psi4.geometry(mol_xyz)
+
+    psi4.set_options({"basis": "aug-cc-pvtz", "scf_type": "df"})
+    ene, wfn = psi4.properties(
+        "mp2", molecule=psi4mol, properties=["DIPOLE"], return_wfn=True
+    )
+    dipole = psi4.variable("MP2 DIPOLE")
+    #  Multiply by 2.5417464519 to convert [e a0] to [Debye]
+    dipole = np.linalg.norm(dipole) * 2.5417464519
+
+    return dipole
 
 
 def generate_grid(wd: str, density: float = 17.0, layers: float = 10.0) -> 0:
@@ -152,10 +169,10 @@ def psi4_esps(
 #     """
 #     The main function to carry out geometry optimization
 #     and QM ESPs generation.
-# 
+#
 #     This function requires a modified version of `openff-recharge`
 #     for customized grid setting and imposed external electric fields.
-# 
+#
 #     :param input_file: input dataset
 #     :type input_file: str
 #     :param wd: working directory
@@ -163,7 +180,7 @@ def psi4_esps(
 #     :return: working directory that contains all the output data
 #     :rtype: str
 #     """
-# 
+#
 #     cwd = os.getcwd()
 #     ifs = oechem.oemolistream(input_file)
 #     omegaOpts = oeomega.OEOmegaOptions()
@@ -171,14 +188,14 @@ def psi4_esps(
 #     omega = oeomega.OEOmega(omegaOpts)
 #     workers = []
 #     for mol_idx, mol in enumerate(ifs.GetOEMols()):
-# 
+#
 #         ret_code = omega.Build(mol)
 #         if ret_code == oeomega.OEOmegaReturnCode_Success:
 #             m_p = os.path.join(wd, f"molecule{mol_idx:02d}")
 #             for idx, conf in enumerate(mol.GetConfs()):
 #                 this_mol = oechem.OEMol(conf)
 #                 c_p = os.path.join(m_p, f"conf{idx}")
-# 
+#
 #                 if os.path.exists(c_p):
 #                     shutil.rmtree(c_p)
 #                 os.makedirs(c_p)
@@ -195,7 +212,7 @@ def psi4_esps(
 #                     ret = psi4_esps.remote(k, c_p)
 #                     workers.append(ret)
 #                 os.chdir(cwd)
-# 
+#
 #             # Save primary mol with no conformers
 #             oemolrecord = oechem.OEMolRecord()
 #             [a.SetMapIdx(a.GetIdx()) for a in mol.GetAtoms()]
@@ -203,18 +220,18 @@ def psi4_esps(
 #                 mol, oechem.OESMILESFlag_AtomMaps | oechem.OESMILESFlag_Hydrogens
 #             )
 #             oemolrecord.set_value(mapped_smile_field, mapped_smiles)
-# 
+#
 #             oemolrecord.set_mol(mol)
 #             rofs = oechem.oeofstream(os.path.join(m_p, "molecule.oedb"))
 #             oechem.OEWriteRecord(rofs, oemolrecord)
-# 
+#
 #         else:
 #             oechem.OEThrow.Warning(
 #                 "%s: %s" % (mol.GetTitle(), oeomega.OEGetOmegaError(ret_code))
 #             )
-# 
+#
 #     ray.get(workers)
-# 
+#
 #     molecules = glob(os.path.join(wd, "molecule*"))
 #     rofs = oechem.oeofstream(os.path.join(wd, "dataset.oedb"))
 #     for mol in molecules:
@@ -227,15 +244,15 @@ def psi4_esps(
 #             for conf in confs:
 #                 coords = np.load(os.path.join(conf, "coordinates.npy"))
 #                 oeconf = oemol.NewConf(oechem.OEFloatArray(coords.flatten().tolist()))
-# 
+#
 #                 conf_record = oemolrecord.get_conf_record(oeconf)
 #                 conf_record.set_value(mapped_smile_field, mapped_smiles)
 #                 conf_record.set_value(
 #                     geometry_angstrom_field, json.dumps(coords, cls=NumpyEncoder)
 #                 )
-# 
+#
 #                 grids = np.load(os.path.join(conf, "grid.npy"))
-# 
+#
 #                 conf_record.set_value(
 #                     grid_angstrom_field, json.dumps(grids, cls=NumpyEncoder)
 #                 )
@@ -245,9 +262,9 @@ def psi4_esps(
 #                         OEField(f"grid_esp_{d}_au_field", OEStringType),
 #                         json.dumps(grid_espi, cls=NumpyEncoder),
 #                     )
-# 
+#
 #                 oemolrecord.set_conf_record(oeconf, conf_record)
 #                 oemolrecord.set_mol(oemol)
-# 
+#
 #         oechem.OEWriteRecord(rofs, oemolrecord)
 #     return wd

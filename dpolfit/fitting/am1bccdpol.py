@@ -3,102 +3,32 @@
 """
 Train and fit AM1-BCC-dPol charges with dPol polarizabilities.
 """
-import os
-import shutil
 import json
-import uuid
-import subprocess
-from rdkit import Chem
-from rdkit.Chem import AllChem
-from rdkit.Geometry import Point3D
-from glob import glob
-import numpy as np
-from typing import List, Dict
-from scipy.spatial.distance import cdist
-from dataclasses import dataclass
-from dpolfit.fitting.respdpol import coulomb_scaling, Mol
 import logging
-import sys
+import os
+from typing import List, Union
+import copy
+
+import numpy as np
 import ray
+from dpolfit.fitting.utils import (
+    BCCLocator,
+    BCCParameter,
+    BondChargeCorrection,
+    PolarizabilityParameter,
+    compute_am1,
+    coulomb_scaling,
+    create_dPolmol,
+    dPolMol,
+    default_bcc_parm,
+    default_alpha_parm,
+    quality_of_fit,
+)
+from rdkit import Chem
+from scipy.spatial.distance import cdist
+from scipy.optimize import minimize
 
 logger = logging.getLogger(__name__)
-
-bohr_2_angstrom = 0.529177
-DEBUG = 1
-
-
-@dataclass
-class BCCParameter:
-    smarts: str
-    value: float
-    pid: int
-
-
-@dataclass
-class BCCLocator:
-    pattern: str
-    indices: tuple
-
-
-@dataclass
-class BondChargeCorrection:
-    assignment: np.array
-    correction: np.array
-    applied_correction: np.array
-
-
-def compute_am1(rdmol):
-    n_atoms = rdmol.GetNumAtoms()
-    formal_charge = Chem.GetFormalCharge(rdmol)
-    cwd = os.getcwd()
-    tmp_path = os.path.join(cwd, str(uuid.uuid4()))
-    os.makedirs(tmp_path)
-    os.chdir(tmp_path)
-    Chem.MolToPDBFile(rdmol, "molecule.pdb")
-    subprocess.run(
-        [
-            "antechamber",
-            "-i",
-            "molecule.pdb",
-            "-fi",
-            "pdb",
-            "-o",
-            "molecule.mol2",
-            "-fo",
-            "mol2",
-            "-c",
-            "mul",
-            "-nc",
-            str(formal_charge),
-        ]
-    )
-    subprocess.run(
-        [
-            "antechamber",
-            "-i",
-            "molecule.mol2",
-            "-fi",
-            "mol2",
-            "-o",
-            "molecule.mol2",
-            "-fo",
-            "mol2",
-            "-c",
-            "wc",
-            "-nc",
-            str(formal_charge),
-            "-cf",
-            "charges.dat",
-        ]
-    )
-    with open("charges.dat", "r") as f:
-        charges = f.read().split()
-    charges = np.array(charges).astype(float)
-    charges += (formal_charge - charges.sum()) / n_atoms
-    os.chdir(cwd)
-    if DEBUG == 1:
-        shutil.rmtree(tmp_path)
-    return charges
 
 
 def find_bccs(mol: Chem.Mol, bccs: list):
@@ -108,12 +38,12 @@ def find_bccs(mol: Chem.Mol, bccs: list):
     for bcc in bccs:
         pt = Chem.MolFromSmarts(bcc)
         if mol.HasSubstructMatch(pt):
-            ret.append(BCCLocator(pattern=bcc, indices=mol.GetSubstructMatches(pt)))
+            ret.append(BCCLocator(smarts=bcc, indices=mol.GetSubstructMatches(pt)))
 
     return ret
 
 
-def assignment_matrix(mol: Chem.Mol, BCCs: List[BCCParameter]):
+def assignment_matrix(mol: Chem.Mol, BCCs: List[BCCParameter] = default_bcc_parm):
     n_atoms = mol.GetNumAtoms()
     n_bccs = len(BCCs)
     location = {p.smarts: idx for idx, p in enumerate(BCCs)}
@@ -126,7 +56,7 @@ def assignment_matrix(mol: Chem.Mol, BCCs: List[BCCParameter]):
     matches = find_bccs(mol, bcc_list)
     matched = []
     for match in matches:
-        pattern = match.pattern
+        pattern = match.smarts
         indices = match.indices
         for index in indices:
             reverse = index[::-1]
@@ -144,7 +74,9 @@ def assignment_matrix(mol: Chem.Mol, BCCs: List[BCCParameter]):
     # check not assigned
     not_assigned = np.where(~counts.any(axis=1))[0]
     if len(not_assigned) > 0:
-        raise ValueError(f"BCC not fully assigned for {not_assigned}")
+        raise ValueError(
+            f"BCC not fully assigned for {not_assigned} {Chem.MolToSmiles(mol)}"
+        )
 
     # each BCCs sums to zero
     wrong_assignment = assignment.sum(axis=0).nonzero()[0]
@@ -162,21 +94,42 @@ def assignment_matrix(mol: Chem.Mol, BCCs: List[BCCParameter]):
     return ret
 
 
-def fit(mol: Mol, BCCs: List[BCCParameter]):
+def compute_am1bccdPol(
+    rdmol: Chem.Mol,
+    BCCs: List[BCCParameter] = default_bcc_parm,
+    am1: Union[np.array, None] = None,
+    write_sdf: bool = True,
+    file_name: str = "molecule.sdf",
+) -> Chem.Mol:
+    ret = assignment_matrix(mol=rdmol, BCCs=BCCs)
+    if am1 is None:
+        am1 = compute_am1(rdmol)
+    else:
+        am1 = am1.reshape(-1)
 
-    rdmol = Chem.MolFromSmiles(mol.mapped_smiles)
-    rdmol = Chem.AddHs(rdmol)
+    am1bccdpol = am1 + ret.applied_correction
+    for a in rdmol.GetAtoms():
+        a.SetDoubleProp("PartialCharge", am1bccdpol[a.GetIdx()])
+    Chem.CreateAtomDoublePropertyList(rdmol, "PartialCharge")
+    if write_sdf:
+        sdwriter = Chem.SDWriter(file_name)
+        sdwriter.write(rdmol)
+        sdwriter.close()
+    return rdmol
+
+
+def fit(
+    mol: dPolMol,
+    BCCs: List[BCCParameter] = default_bcc_parm,
+):
+
+    rdmol = mol.rdmol
     n_atoms = rdmol.GetNumAtoms()
-    AllChem.Compute2DCoords(rdmol)
-    conf = rdmol.GetConformer()
-    for i in range(rdmol.GetNumAtoms()):
-        xyz = mol.coordinates[i] * bohr_2_angstrom
-        conf.SetAtomPosition(i, Point3D(*xyz))
 
-    precharges = compute_am1(rdmol).reshape(-1)
-    # offmol = mol.offmol
-    # offmol.assign_partial_charges("am1-mulliken")
-    # precharges = offmol.partial_charges.m_as("elementary_charge")
+    if mol.am1_charges is None:
+        precharges = compute_am1(rdmol).reshape(-1)
+    else:
+        precharges = mol.am1_charges.reshape(-1)
 
     n_bccs = len(BCCs)
     location = {p.smarts: idx for idx, p in enumerate(BCCs)}
@@ -200,16 +153,21 @@ def fit(mol: Mol, BCCs: List[BCCParameter]):
     for k in range(n_atoms):
         drjk[k] = r_jk[k] * (r_jk3[k] * coulomb14scale_matrix[k]).reshape(-1, 1)
 
+    # not sure why there is nan, seems random
+    if np.where(np.isnan(drjk))[0].shape[0] > 0:
+        logger.info("found nan in drjk")
+        drjk = np.nan_to_num(drjk)
+
     A = np.zeros((n_bccs, n_bccs))
     B = np.zeros(n_bccs)
 
     matched_bccs = find_bccs(rdmol, bcc_list)
     param_dict = {
-        r.pattern: list(set([atom for pair in r.indices for atom in pair]))
+        r.smarts: list(set([atom for pair in r.indices for atom in pair]))
         for r in matched_bccs
     }
 
-    esps = mol.data_esp.reshape(-1)
+    esps = mol.data_esp["0"].reshape(-1)
     precharge_esp = np.dot(r_ij1.T, precharges)
     efield = np.zeros((n_atoms, 3))
     for k in range(n_atoms):
@@ -223,97 +181,134 @@ def fit(mol: Mol, BCCs: List[BCCParameter]):
     ret_assignment = assignment_matrix(rdmol, BCCs)
     assignment = ret_assignment.assignment
 
-    D_ijE = np.zeros((n_atoms, n_bccs, grid.shape[0]))
-    for i in range(n_atoms):
-        for j in range(n_bccs):
-            D_ijE[i, j] = assignment[i, j] * r_ij1[i]
+    D = np.zeros((n_bccs, grid.shape[0]))
+    for i in range(n_bccs):
+        for j in range(n_atoms):
+            D[i] += (
+                assignment[j, i] * r_ij1[j]
+                + np.dot(np.dot(assignment[:, i], drjk[j]), r_ij[j].T)
+                * r_ij3[j]
+                * mol.polarizabilities[j]
+            )
 
     for k, (smirks_k, bccs_k) in enumerate(param_dict.items()):
-        logger.info(f"Processing {smirks_k}...")
+        logger.debug(f"Processing {smirks_k}...")
 
-        Cik = D_ijE[bccs_k].sum(axis=1).sum(axis=0)
-        B[location[smirks_k]] += np.dot(Cik, vdiff).item()
+        loc_k = location[smirks_k]
+        Cik = D[loc_k]
+        B[loc_k] += np.dot(Cik, vdiff).item()
 
         for l, (smirks_l, bccs_l) in enumerate(param_dict.items()):
             if k > l:
                 continue
-            Cil = D_ijE[bccs_l].sum(axis=1).sum(axis=0)
-            A[location[smirks_k], location[smirks_l]] += np.dot(Cil, Cik)
+            loc_l = location[smirks_l]
+            Cil = D[loc_l]
+            A[loc_k, loc_l] += np.dot(Cil, Cik)
 
     A += A.T - np.diag(A.diagonal())
-
-    return A, B
-
-
-def training(traingset_path: str, BCCs: List[BCCParameter], off_ff, num_cpus: int = 8):
-    cwd = os.getcwd()
-    if num_cpus > 1:
-        ray.init(_temp_dir="/tmp/ray_tmp", num_gpus=0, num_cpus=num_cpus)
-        fit_remote = ray.remote(num_cpus=1, num_gpus=0)(fit)
-        fit_method = {"fit": fit_remote.remote}
+    if np.where(np.isnan(B))[0].shape[0] > 0:
+        [atom.SetAtomMapNum(0) for atom in rdmol.GetAtoms()]
+        rdmol = Chem.RemoveHs(rdmol)
+        smi = Chem.MolToSmiles(rdmol, allHsExplicit=False, kekuleSmiles=True)
+        print("found nan in B", smi)
+        np.savez(f"{smi}.npz", A=A, B=B, D=drjk)
+        print("-" * 55)
+        return None
     else:
-        fit_method = {"fit": fit}
+        return A, B
 
-    ndim = len(BCCs)
-    A = np.zeros((ndim, ndim))
-    B = np.zeros(ndim)
-    location = {p.smarts: idx for idx, p in enumerate(BCCs)}
-    molecules = glob(os.path.join(traingset_path, "mol*"))
-    mols = [Mol(data_path=f, off_ff=off_ff) for f in molecules]
-    ret = [fit_method["fit"](mol=mol, BCCs=BCCs) for mol in mols]
-    if num_cpus > 1:
-        ret = ray.get(ret)
-    A += sum([r[0] for r in ret])
-    B += sum([r[1] for r in ret])
 
-    if np.where(B == 0)[0].size > 0:
-        not_fitted = np.where(B == 0)[0]
+class TrainingSet:
+    def __init__(
+        self,
+        trainingset_path: List,
+        BCCs: List[BCCParameter] = default_bcc_parm,
+        parameter_list: [PolarizabilityParameter] = default_alpha_parm,
+        num_cpus: int = 8,
+    ):
+        self.trainingset_path = trainingset_path
+        self.BCCs = BCCs
+        self.parameter_list = parameter_list
+        self.num_cpus = num_cpus
+        self.results = []
+        self.iter = 0
+        cwd = os.getcwd()
+        if self.num_cpus > 1:
+            ray.init(_temp_dir="/tmp/ray_tmp", num_gpus=0, num_cpus=self.num_cpus)
+            fit_remote = ray.remote(num_cpus=1, num_gpus=0)(fit)
+            self.fit_method = {"fit": fit_remote.remote}
+        else:
+            self.fit_method = {"fit": fit}
+        self.ndim = len(self.BCCs)
+        self.location = {p.smarts: idx for idx, p in enumerate(self.BCCs)}
 
-        for i in sorted(not_fitted, reverse=True):
-            nft = BCCs.pop(i)
-            logger.info(f"Parameter {nft.smarts} not fitted")
+        self.mols = [
+            create_dPolmol(data_path=f, parameter_list=self.parameter_list, am1=False)
+            for f in self.trainingset_path
+            if os.path.exists(os.path.join(f, "grid_esp.0.npy"))
+        ]
 
-        fitted_smirks = [p.smarts for p in BCCs]
-        fitted_positions = [location[p] for p in fitted_smirks]
+    def training(self):
+        BCCs = copy.deepcopy(self.BCCs)
+        A = np.zeros((self.ndim, self.ndim))
+        B = np.zeros(self.ndim)
+        ret = [self.fit_method["fit"](mol=mol, BCCs=BCCs) for mol in self.mols]
+        if self.num_cpus > 1:
+            ret = ray.get(ret)
+        A += sum([r[0] for r in ret if r is not None])
+        B += sum([r[1] for r in ret if r is not None])
 
-        A = A[tuple(np.meshgrid(fitted_positions, fitted_positions))]
-        B = B[fitted_positions]
+        if np.where(B == 0)[0].size > 0:
+            not_fitted = np.where(B == 0)[0]
 
-    else:
-        pass
+            for i in sorted(not_fitted, reverse=True):
+                nft = BCCs.pop(i)
+                logger.debug(f"Parameter {nft.smarts} not fitted")
+            fitted_smirks = [p.smarts for p in BCCs]
+            fitted_positions = [self.location[p] for p in fitted_smirks]
 
-    np.save(os.path.join(cwd, "A.npy"), A)
-    np.save(os.path.join(cwd, "B.npy"), B)
+            A = A[tuple(np.meshgrid(fitted_positions, fitted_positions))]
+            B = B[fitted_positions]
 
-    logger.debug(f"A: {A}")
-    logger.debug(f"B: {B}")
+        else:
+            pass
 
-    ret = np.linalg.solve(A, B)
+        ret = np.linalg.solve(A, B)
+        self.results.append({"iteration": self.iter, "parameters": ret.tolist()})
+        new_bccs = [
+            BCCParameter(smarts=bcc.smarts, value=value, pid=bcc.pid)
+            for bcc, value in zip(BCCs, ret)
+        ]
 
-    results = []
-    for p, v in zip(BCCs, ret):
-        p.value = v
-        results.append(p.__dict__)
+        this_mols = []
+        for mol in self.mols:
+            charged_mol = compute_am1bccdPol(
+                rdmol=mol.rdmol, BCCs=new_bccs, am1=mol.am1_charges, write_sdf=False
+            )
+            charges = [a.GetDoubleProp("PartialCharge") for a in charged_mol.GetAtoms()]
+            mol.am1_charges = np.array(charges)
+            mol.rdmol = charged_mol
+            this_mols.append(mol)
 
-    json.dump(results, open(os.path.join(cwd, "results.json"), "w"), indent=2)
-    return BCCs
+        rrms = [quality_of_fit(mol, dipole=False)["dpol rrms"] for mol in this_mols]
+
+        ret = [{"smarts": bcc.smarts, "value": value} for bcc, value in zip(BCCs, ret)]
+        json.dump(ret, open("results.json", "w"), indent=2)
+
+        return ret
+
+    # def training(self, tol=1e-7):
+    #     last_rrms = self._worker()
+    #     this_rrms = 0
+    #     logger.info(f"RRMS = {last_rrms}")
+    #     while abs(last_rrms-this_rrms) > tol:
+    #         this_rrms = self._worker()
+    #         self.iter += 1
+    #         last_rrms = this_rrms
+    #         logger.info(f"iteration {self.iter}")
+    #         logger.info(f"RRMS = {this_rrms}")
+    #     json.dump(self.results, open("results.json", "w"), indent=2)
 
 
 if __name__ == "__main__":
-    from openff.toolkit import ForceField
-
-    original_bccs = json.load(open("original-am1-bcc.json", "r"))
-    logging.basicConfig(
-        filename="training.log",
-        format="%(asctime)s %(levelname)s: %(message)s",
-        datefmt="%m/%d/%Y %I:%M:%S %p",
-        level=logging.INFO,
-    )
-    ff = ForceField("custom.offxml", allow_cosmetic_attributes=True, load_plugins=True)
-    BCCs = [
-        BCCParameter(smarts=r["smirks"], value=0.0, pid=idx)
-        for idx, r in enumerate(original_bccs)
-    ]
-    training_data = "/home/wwilla/data_scratch/data_mikoyan/data_water/data_solv/training/trainingset/data"
-
-    results = training(traingset_path=training_data, BCCs=BCCs, off_ff=ff)
+    print("am1bccdpol module")

@@ -10,6 +10,7 @@ import numpy as np
 try:
     from openeye import oechem
     from openeye.oechem import OEBlobType, OEField, OEMolRecord, OEStringType
+
     mapped_smile_field = OEField(
         "canonical_isomeric_explicit_hydrogen_mapped_smiles", OEStringType
     )
@@ -18,7 +19,7 @@ try:
     geometry_angstrom_field = OEField("geometry_angstrom", OEStringType)
     grid_angstrom_field = OEField("grid_angstrom", OEStringType)
     grid_esp_0_au_field = OEField("grid_esp_0_au", OEStringType)
-    
+
     smiTags = oechem.OESMILESFlag_AtomMaps
     use_openeye = True
 except ImportError as e:
@@ -36,6 +37,7 @@ perturb_dipoles = {
 }
 
 if use_openeye:
+
     def _qcmol2oemol(qcmol: qcMolecule) -> OEMolRecord:
         """
         Convert QCMol to OEMol
@@ -131,7 +133,8 @@ def get_bond_length(a, b, theta):
     ret = np.sqrt(a**2 + b**2 - 2 * a * b * np.cos(theta))
     return ret
 
+
 def get_length_oh(theta, c):
     theta = theta * np.pi / 180
-    ret = np.sqrt(c**2/2/(1-np.cos(theta)))
+    ret = np.sqrt(c**2 / 2 / (1 - np.cos(theta)))
     return ret

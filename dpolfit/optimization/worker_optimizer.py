@@ -4,10 +4,8 @@ import logging
 import os
 import json
 from collections import defaultdict
-from sys import stdout
-from typing import Generator, Dict, List, Literal, Tuple, Union
+from typing import Dict, List, Union
 import numpy as np
-import openmm.unit as omm_unit
 import ray
 from dpolfit.optimization.utils import (
     Ensemble,
@@ -16,8 +14,6 @@ from dpolfit.optimization.utils import (
     SimulationOutput,
     SimulationSettings,
     compute,
-    compute_DielectricProperties,
-    compute_hvap_alpha_kappa,
     create_serialized_system,
     get_custom_parms,
     read_openmm_output,
@@ -25,17 +21,16 @@ from dpolfit.optimization.utils import (
     ureg,
     Q_,
 )
-import shutil
+import pint
 from openff.interchange import Interchange
 from openff.toolkit import ForceField as OForceField
 from openff.toolkit import Topology as OTopology
-from openmm import Context, LangevinIntegrator, Platform, System, XmlSerializer
-from openmm.app import PDBFile
 from scipy.optimize import minimize
 from dpolfit.openmm.md import run
 from dataclasses import dataclass, replace
 
 logger = logging.getLogger(__name__)
+pint.set_application_registry(ureg)
 
 
 @dataclass
@@ -153,7 +148,7 @@ class Worker:
         self.eq_time = eq_time
         self.mpid = MPID
 
-    def worker(self, input_array, penalty_priors=None, weights=None):
+    def worker(self, input_array, penalty_priors=None, weights=None, optimize=True):
         this_iteration = self.iteration.iteration_number
         logger.info(f"Running iteration {this_iteration}")
         logger.info(input_array)
@@ -283,14 +278,17 @@ class Worker:
             objt = 0
             data = []
             for sid, (result, ci) in results.items():
-                this_objective = Worker.objective(
-                    calc_data=result,
-                    ref_data=self.reference_data[sid],
-                    new_params=input_array,
-                    ini_params=self.ini_params,
-                    penalty_priors=penalty_priors,
-                    weights=weights,
-                )
+                if optimize:
+                    this_objective = Worker.objective(
+                        calc_data=result,
+                        ref_data=self.reference_data[sid],
+                        new_params=input_array,
+                        ini_params=self.ini_params,
+                        penalty_priors=penalty_priors,
+                        weights=weights,
+                    )
+                else:
+                    this_objective = 0
                 objt += this_objective
                 data.append(
                     {k: v.magnitude for k, v in result.__dict__.items()}
@@ -316,11 +314,12 @@ class Worker:
         bounds: Union[np.ndarray, None] = None,
         penalty_priors: Union[np.ndarray, None] = None,
         weights: Union[Dict, None] = None,
+        optimize: bool = True,
     ):
         res = minimize(
             self.worker,
             x0=self.ini_params,
-            args=(penalty_priors, weights),
+            args=(penalty_priors, weights, optimize),
             method=opt_method,
             bounds=bounds,
             # options={"maxiter": 50},
