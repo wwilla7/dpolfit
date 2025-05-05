@@ -23,7 +23,7 @@ The polarizable electrostatic model is described at:
 
 **A Simple, Polarizable, Rigid, 3-Point Water Model Using the Direct Polarization Approximation.**
     Liangyue W. Drew and Michael K. Gilson
-    ChemRxiv. 2025; `doi:10.26434/chemrxiv-2025-b18hr <doi:10.26434/chemrxiv-2025-b18hr>`_ This content is a preprint and has not been peer-reviewed.
+    ChemRxiv. 2025; `DOI:10.26434/chemrxiv-2025-b18hr <https://doi.org/10.26434/chemrxiv-2025-b18hr>`_. This content is a preprint and has not been peer-reviewed.
 
 Copyright
 ----------
