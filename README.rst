@@ -21,6 +21,10 @@ The polarizable electrostatic model is described at:
     Liangyue Wang, Michael Schauperl, David L. Mobley, Christopher Bayly, and Michael K. Gilson
     Journal of Chemical Theory and Computation 2024 20 (3), 1293-1305 `DOI: 10.1021/acs.jctc.3c01171 <https://pubs.acs.org/doi/10.1021/acs.jctc.3c01171>`_.
 
+**A Simple, Polarizable, Rigid, 3-Point Water Model Using the Direct Polarization Approximation.**
+    Liangyue W. Drew and Michael K. Gilson
+    ChemRxiv. 2025; `doi:10.26434/chemrxiv-2025-b18hr <doi:10.26434/chemrxiv-2025-b18hr>`_ This content is a preprint and has not been peer-reviewed.
+
 Copyright
 ----------
 
